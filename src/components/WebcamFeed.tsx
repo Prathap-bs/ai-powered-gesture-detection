@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +31,8 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
   const [retryCount, setRetryCount] = useState(0);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
+  const [streamReady, setStreamReady] = useState(false);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Function to check camera permissions
   const checkCameraPermission = async () => {
@@ -86,48 +89,12 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log("Stream obtained successfully", stream.id);
       
-      // Make sure videoRef.current exists before setting srcObject
-      if (videoRef.current) {
-        console.log("Setting stream to video element");
-        videoRef.current.srcObject = stream;
-        
-        // Ensure video plays after metadata is loaded
-        videoRef.current.onloadedmetadata = () => {
-          console.log("Video metadata loaded");
-          if (videoRef.current) {
-            videoRef.current.play()
-              .then(() => {
-                console.log("Video playback started successfully");
-                setIsStreaming(true);
-                setIsLoading(false);
-                
-                if (onVideoRef) {
-                  onVideoRef(videoRef.current);
-                }
-                
-                toast({
-                  title: "Camera Connected",
-                  description: "Your camera is now active and streaming.",
-                });
-              })
-              .catch(e => {
-                console.error("Error playing video:", e);
-                setError("Could not start video playback. Please try again.");
-                setIsLoading(false);
-              });
-          }
-        };
-        
-        // Handle errors that might occur after setting srcObject
-        videoRef.current.onerror = (event) => {
-          console.error("Video element error:", event);
-          setError("Error in video playback. Please refresh the page and try again.");
-          setIsLoading(false);
-        };
-      } else {
-        console.error("Video ref is null at stream initialization");
-        throw new Error("Video element not available. Please try refreshing the page.");
-      }
+      // Store stream reference to prevent garbage collection
+      streamRef.current = stream;
+      setStreamReady(true);
+      
+      // We'll handle setting the stream to video element in the useEffect
+      
     } catch (err) {
       console.error("Error accessing webcam:", err);
       let errorMessage = "Failed to access camera. Please check permissions.";
@@ -162,19 +129,21 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
   };
 
   const stopStream = () => {
-    if (!videoRef.current) return;
-    
-    const stream = videoRef.current.srcObject as MediaStream;
-    if (stream) {
+    if (streamRef.current) {
       console.log("Stopping all tracks in stream");
-      const tracks = stream.getTracks();
+      const tracks = streamRef.current.getTracks();
       tracks.forEach(track => {
         console.log(`Stopping track: ${track.kind}`);
         track.stop();
       });
+      streamRef.current = null;
+    }
+    
+    if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
     
+    setStreamReady(false);
     setIsStreaming(false);
     
     if (onVideoRef) {
@@ -272,6 +241,44 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
     }, 500);
   };
 
+  // Effect to handle stream initialization after DOM is ready
+  useEffect(() => {
+    if (streamReady && streamRef.current && videoRef.current) {
+      console.log("Setting stream to video element now that both are ready");
+      videoRef.current.srcObject = streamRef.current;
+      
+      videoRef.current.onloadedmetadata = () => {
+        console.log("Video metadata loaded");
+        if (videoRef.current) {
+          videoRef.current.play()
+            .then(() => {
+              console.log("Video playback started successfully");
+              setIsStreaming(true);
+              
+              if (onVideoRef) {
+                onVideoRef(videoRef.current);
+              }
+              
+              toast({
+                title: "Camera Connected",
+                description: "Your camera is now active and streaming.",
+              });
+            })
+            .catch(e => {
+              console.error("Error playing video:", e);
+              setError("Could not start video playback. Please try again.");
+            });
+        }
+      };
+      
+      videoRef.current.onerror = (event) => {
+        console.error("Video element error:", event);
+        setError("Error in video playback. Please refresh the page and try again.");
+      };
+    }
+  }, [streamReady, videoRef.current]);
+
+  // Initial setup effect
   useEffect(() => {
     // Allow DOM to fully initialize before starting camera
     console.log("WebcamFeed component mounted");
@@ -285,7 +292,7 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
           startStream();
         }
       });
-    }, 1000); // Increased delay to ensure DOM is ready
+    }, 1500); // Increased delay to ensure DOM is ready
     
     // Check fullscreen changes
     const handleFullscreenChange = () => {
@@ -355,7 +362,7 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="p-0 flex-grow flex items-center justify-center bg-black/5 dark:bg-white/5">
+      <CardContent className="p-0 flex-grow flex items-center justify-center bg-black/5 dark:bg-white/5 relative">
         {error ? (
           <div className="text-center p-4 flex flex-col items-center">
             <Alert variant="destructive" className="mb-3 max-w-md">
