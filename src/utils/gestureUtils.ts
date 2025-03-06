@@ -1,8 +1,8 @@
-
 // This file contains utility functions for gesture detection
 
 export type GestureType = 
   | "victory" // V sign with index and middle finger
+  | "manual"  // Manual capture
   | "none";
 
 export type GestureAlert = {
@@ -86,6 +86,7 @@ export const downloadImage = (imageData: string | null, gesture: GestureType): b
 export const getGestureColor = (gesture: GestureType): string => {
   switch (gesture) {
     case "victory": return "text-red-500";
+    case "manual": return "text-blue-500";
     case "none": return "text-gray-500";
     default: return "text-gray-500";
   }
@@ -95,6 +96,7 @@ export const getGestureColor = (gesture: GestureType): string => {
 export const getGestureDisplayName = (gesture: GestureType): string => {
   switch (gesture) {
     case "victory": return "Victory Sign Emergency";
+    case "manual": return "Manual Capture";
     case "none": return "No Gesture";
     default: return "Unknown";
   }
