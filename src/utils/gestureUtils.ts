@@ -6,6 +6,7 @@ export type GestureType =
   | "danger" 
   | "medical" 
   | "police" 
+  | "manual"  // Added "manual" as a valid gesture type
   | "none";
 
 export type GestureAlert = {
@@ -98,6 +99,7 @@ export const getGestureColor = (gesture: GestureType): string => {
     case "danger": return "text-yellow-500";
     case "medical": return "text-blue-500";
     case "police": return "text-indigo-500";
+    case "manual": return "text-purple-500"; // Added color for manual gesture
     case "none": return "text-gray-500";
     default: return "text-gray-500";
   }
@@ -111,6 +113,7 @@ export const getGestureDisplayName = (gesture: GestureType): string => {
     case "danger": return "Danger Alert";
     case "medical": return "Medical Assistance";
     case "police": return "Police Required";
+    case "manual": return "Manual Capture"; // Added display name for manual gesture
     case "none": return "No Gesture";
     default: return "Unknown";
   }
