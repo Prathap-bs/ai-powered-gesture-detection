@@ -50,15 +50,18 @@ const Dashboard = () => {
   };
 
   const handleGestureDetected = (alert: GestureAlert) => {
-    setAlerts(prev => [alert, ...prev]);
-    
-    // Only show toast for serious alerts
-    if (["sos", "danger"].includes(alert.gestureType)) {
-      toast({
-        title: "Emergency Gesture Detected!",
-        description: `A ${alert.gestureType.toUpperCase()} gesture was detected on camera.`,
-        variant: "destructive",
-      });
+    // Only add the alert if it's not "none" type
+    if (alert.gestureType !== "none") {
+      setAlerts(prev => [alert, ...prev]);
+      
+      // Only show toast for victory gesture with high confidence
+      if (alert.gestureType === "victory" && alert.confidence > 0.9) {
+        toast({
+          title: "Emergency Gesture Detected!",
+          description: `A Victory sign was detected on camera with ${(alert.confidence * 100).toFixed(0)}% confidence.`,
+          variant: "destructive",
+        });
+      }
     }
   };
 

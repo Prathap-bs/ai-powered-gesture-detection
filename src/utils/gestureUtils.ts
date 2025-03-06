@@ -27,16 +27,17 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
   // Simulate processing delay
   await new Promise(resolve => setTimeout(resolve, 500));
 
-  // For demo purposes, randomly return "victory" gesture occasionally, but mostly "none"
-  // In a real implementation, this would be replaced with proper computer vision
-  // to detect the V hand sign
+  // For demo purposes, we'll make the random detection less frequent and with higher threshold
+  // This will reduce false positives when no V sign is shown
   const random = Math.random();
   
-  if (random > 0.85) {
-    // Only detect victory gesture with varying confidence
-    return { gesture: "victory", confidence: 0.7 + (Math.random() * 0.25) };
+  // Lowering the frequency of false detections significantly (from 15% to 5%)
+  if (random > 0.95) {
+    // Only detect victory gesture with high confidence when detected
+    return { gesture: "victory", confidence: 0.85 + (Math.random() * 0.15) };
   } else {
-    return { gesture: "none", confidence: 0.9 + (Math.random() * 0.1) };
+    // Higher confidence for "none" state to avoid mistaken detections
+    return { gesture: "none", confidence: 0.95 + (Math.random() * 0.05) };
   }
 };
 

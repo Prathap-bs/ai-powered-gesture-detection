@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera } from "lucide-react";
@@ -50,8 +51,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // If we detect a victory gesture with high confidence, notify and save alert
-      if (result.gesture === "victory" && result.confidence > 0.7) {
+      // Increased threshold to 0.85 (previously 0.7) to reduce false positives
+      if (result.gesture === "victory" && result.confidence > 0.85) {
         const imageData = captureImage(videoRef);
         setLastCapturedImage(imageData);
         
@@ -69,8 +70,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           onGestureDetected(alert);
         }
         
-        // Show toast notification for high confidence alerts
-        if (result.confidence > 0.8) {
+        // Also increased this threshold to 0.9 (previously 0.8)
+        if (result.confidence > 0.9) {
           // Auto-download for victory gestures
           const success = downloadImage(imageData, result.gesture);
           
