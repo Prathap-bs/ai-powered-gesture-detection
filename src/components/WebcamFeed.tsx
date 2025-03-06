@@ -1,8 +1,7 @@
-
 import React, { useRef, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Fullscreen, Maximize2, Minimize2, Video, VideoOff, Download, Shield } from "lucide-react";
+import { Fullscreen, Maximize2, Minimize2, Video, VideoOff, Download, Shield, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -28,6 +27,7 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [permissionState, setPermissionState] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
 
@@ -37,10 +37,12 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
       // Check if the browser supports permissions API
       if (navigator.permissions && navigator.permissions.query) {
         const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        console.log("Camera permission state:", result.state);
         setPermissionState(result.state);
         
         // Listen for permission changes
         result.addEventListener('change', () => {
+          console.log("Permission changed to:", result.state);
           setPermissionState(result.state);
           if (result.state === 'granted') {
             startStream();
@@ -61,12 +63,16 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
     setError(null);
     
     try {
+      console.log("Starting camera stream attempt", retryCount + 1);
+      
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Media devices API not supported in this browser.");
       }
 
       // First check permissions
       const permissionStatus = await checkCameraPermission();
+      console.log("Current permission status:", permissionStatus);
+      
       if (permissionStatus === 'denied') {
         throw new Error("Camera permission has been denied. Please reset permissions in your browser settings.");
       }
@@ -76,26 +82,51 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
         audio: false,
       };
       
+      console.log("Requesting media with constraints:", JSON.stringify(constraints));
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log("Stream obtained successfully", stream.id);
       
       // Make sure videoRef.current exists before setting srcObject
       if (videoRef.current) {
+        console.log("Setting stream to video element");
         videoRef.current.srcObject = stream;
+        
+        // Ensure video plays after metadata is loaded
         videoRef.current.onloadedmetadata = () => {
-          if (videoRef.current) videoRef.current.play().catch(e => console.error("Error playing video:", e));
+          console.log("Video metadata loaded");
+          if (videoRef.current) {
+            videoRef.current.play()
+              .then(() => {
+                console.log("Video playback started successfully");
+                setIsStreaming(true);
+                setIsLoading(false);
+                
+                if (onVideoRef) {
+                  onVideoRef(videoRef.current);
+                }
+                
+                toast({
+                  title: "Camera Connected",
+                  description: "Your camera is now active and streaming.",
+                });
+              })
+              .catch(e => {
+                console.error("Error playing video:", e);
+                setError("Could not start video playback. Please try again.");
+                setIsLoading(false);
+              });
+          }
         };
-        setIsStreaming(true);
         
-        if (onVideoRef) {
-          onVideoRef(videoRef.current);
-        }
-        
-        toast({
-          title: "Camera Connected",
-          description: "Your camera is now active and streaming.",
-        });
+        // Handle errors that might occur after setting srcObject
+        videoRef.current.onerror = (event) => {
+          console.error("Video element error:", event);
+          setError("Error in video playback. Please refresh the page and try again.");
+          setIsLoading(false);
+        };
       } else {
-        throw new Error("Video element not initialized.");
+        console.error("Video ref is null at stream initialization");
+        throw new Error("Video element not available. Please try refreshing the page.");
       }
     } catch (err) {
       console.error("Error accessing webcam:", err);
@@ -109,11 +140,17 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
           errorMessage = "No camera detected. Please connect a camera and try again.";
         } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
           errorMessage = "Camera is in use by another application. Please close other applications and try again.";
+        } else if (err.name === "AbortError") {
+          errorMessage = "Camera initialization was aborted. Please try again.";
+        } else if (err.name === "TypeError") {
+          errorMessage = "Camera initialization failed. Please refresh the page and try again.";
+        } else {
+          errorMessage = `Camera error: ${err.message}`;
         }
       }
       
       setError(errorMessage);
-      console.log("Error details:", JSON.stringify(err));
+      console.log("Error details:", err);
       toast({
         title: "Camera Error",
         description: errorMessage,
@@ -129,8 +166,12 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
     
     const stream = videoRef.current.srcObject as MediaStream;
     if (stream) {
+      console.log("Stopping all tracks in stream");
       const tracks = stream.getTracks();
-      tracks.forEach(track => track.stop());
+      tracks.forEach(track => {
+        console.log(`Stopping track: ${track.kind}`);
+        track.stop();
+      });
       videoRef.current.srcObject = null;
     }
     
@@ -222,13 +263,29 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
     }
   };
 
+  const handleRetry = () => {
+    console.log("Retrying camera connection");
+    setRetryCount(prev => prev + 1);
+    stopStream();
+    setTimeout(() => {
+      startStream();
+    }, 500);
+  };
+
   useEffect(() => {
-    // Check permissions first, then start stream with a short delay to ensure DOM is ready
+    // Allow DOM to fully initialize before starting camera
+    console.log("WebcamFeed component mounted");
     const timer = setTimeout(() => {
-      checkCameraPermission().then(() => {
-        startStream();
+      console.log("Initial camera check after delay");
+      checkCameraPermission().then((permissionStatus) => {
+        console.log("Initial permission status:", permissionStatus);
+        // Only auto-start if we have permission or it's undefined (first time)
+        if (permissionStatus !== 'denied') {
+          console.log("Attempting to start stream");
+          startStream();
+        }
       });
-    }, 800);
+    }, 1000); // Increased delay to ensure DOM is ready
     
     // Check fullscreen changes
     const handleFullscreenChange = () => {
@@ -243,7 +300,7 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
       stopStream();
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, [deviceId]);
+  }, [deviceId]); // Only re-run this effect if deviceId changes
 
   return (
     <Card ref={cardRef} className="overflow-hidden h-full flex flex-col">
@@ -314,17 +371,17 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
               <ol className="list-decimal list-inside text-left space-y-1">
                 <li>Click the camera icon in your browser's address bar</li>
                 <li>Select "Allow" for camera access</li>
-                <li>Refresh the page after changing permissions</li>
+                <li>Click the "Try Again" button below</li>
               </ol>
             </div>
             
             <Button 
               variant="default" 
               size="sm" 
-              onClick={startStream} 
-              disabled={isLoading}
-              className="mt-2"
+              onClick={handleRetry}
+              className="mt-2 flex items-center gap-1"
             >
+              <RefreshCw className="h-3.5 w-3.5" />
               Try Again
             </Button>
           </div>
@@ -334,14 +391,18 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
             <p className="text-sm text-muted-foreground">Connecting to camera...</p>
           </div>
         ) : (
-          <div className="webcam-container w-full h-full">
+          <div className="webcam-container w-full h-full relative">
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
               className="w-full h-full object-cover"
-              onCanPlay={() => setIsLoading(false)}
+              onCanPlay={() => {
+                console.log("Video can play event fired");
+                setIsLoading(false);
+                setIsStreaming(true);
+              }}
             />
             <div className="webcam-overlay"></div>
           </div>
@@ -352,4 +413,3 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
 };
 
 export default WebcamFeed;
-
