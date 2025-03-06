@@ -2,9 +2,10 @@
 import React, { useRef, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Fullscreen, Maximize2, Minimize2, Video, VideoOff, Download } from "lucide-react";
+import { Fullscreen, Maximize2, Minimize2, Video, VideoOff, Download, Shield } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 type WebcamFeedProps = {
   feedName: string;
@@ -26,8 +27,34 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [permissionState, setPermissionState] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const { toast } = useToast();
+
+  // Function to check camera permissions
+  const checkCameraPermission = async () => {
+    try {
+      // Check if the browser supports permissions API
+      if (navigator.permissions && navigator.permissions.query) {
+        const result = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        setPermissionState(result.state);
+        
+        // Listen for permission changes
+        result.addEventListener('change', () => {
+          setPermissionState(result.state);
+          if (result.state === 'granted') {
+            startStream();
+          }
+        });
+        
+        return result.state;
+      }
+      return null;
+    } catch (err) {
+      console.log("Permission API not supported");
+      return null;
+    }
+  };
 
   const startStream = async () => {
     setIsLoading(true);
@@ -36,6 +63,12 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("Media devices API not supported in this browser.");
+      }
+
+      // First check permissions
+      const permissionStatus = await checkCameraPermission();
+      if (permissionStatus === 'denied') {
+        throw new Error("Camera permission has been denied. Please reset permissions in your browser settings.");
       }
 
       const constraints: MediaStreamConstraints = {
@@ -48,6 +81,9 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
       // Make sure videoRef.current exists before setting srcObject
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          if (videoRef.current) videoRef.current.play().catch(e => console.error("Error playing video:", e));
+        };
         setIsStreaming(true);
         
         if (onVideoRef) {
@@ -77,6 +113,7 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
       }
       
       setError(errorMessage);
+      console.log("Error details:", JSON.stringify(err));
       toast({
         title: "Camera Error",
         description: errorMessage,
@@ -186,10 +223,12 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
   };
 
   useEffect(() => {
-    // Start stream automatically with a short delay to ensure DOM is ready
+    // Check permissions first, then start stream with a short delay to ensure DOM is ready
     const timer = setTimeout(() => {
-      startStream();
-    }, 500);
+      checkCameraPermission().then(() => {
+        startStream();
+      });
+    }, 800);
     
     // Check fullscreen changes
     const handleFullscreenChange = () => {
@@ -261,13 +300,30 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
       </CardHeader>
       <CardContent className="p-0 flex-grow flex items-center justify-center bg-black/5 dark:bg-white/5">
         {error ? (
-          <div className="text-center p-4 text-red-500 text-sm flex flex-col items-center">
-            <p className="mb-2">{error}</p>
+          <div className="text-center p-4 flex flex-col items-center">
+            <Alert variant="destructive" className="mb-3 max-w-md">
+              <Shield className="h-4 w-4 mr-2" />
+              <AlertTitle>Camera Access Error</AlertTitle>
+              <AlertDescription className="text-sm">
+                {error}
+              </AlertDescription>
+            </Alert>
+            
+            <div className="mb-3 text-sm max-w-md">
+              <p className="font-medium mb-2">To enable camera access:</p>
+              <ol className="list-decimal list-inside text-left space-y-1">
+                <li>Click the camera icon in your browser's address bar</li>
+                <li>Select "Allow" for camera access</li>
+                <li>Refresh the page after changing permissions</li>
+              </ol>
+            </div>
+            
             <Button 
-              variant="outline" 
+              variant="default" 
               size="sm" 
               onClick={startStream} 
               disabled={isLoading}
+              className="mt-2"
             >
               Try Again
             </Button>
@@ -296,3 +352,4 @@ const WebcamFeed: React.FC<WebcamFeedProps> = ({
 };
 
 export default WebcamFeed;
+
