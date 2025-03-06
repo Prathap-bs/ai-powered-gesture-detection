@@ -1,12 +1,8 @@
+
 // This file contains utility functions for gesture detection
 
 export type GestureType = 
-  | "sos" 
-  | "help" 
-  | "danger" 
-  | "medical" 
-  | "police" 
-  | "manual"  // Added "manual" as a valid gesture type
+  | "victory" // V sign with index and middle finger
   | "none";
 
 export type GestureAlert = {
@@ -31,19 +27,14 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
   // Simulate processing delay
   await new Promise(resolve => setTimeout(resolve, 500));
 
-  // For demo purposes, randomly return gestures occasionally, but mostly "none"
+  // For demo purposes, randomly return "victory" gesture occasionally, but mostly "none"
+  // In a real implementation, this would be replaced with proper computer vision
+  // to detect the V hand sign
   const random = Math.random();
   
-  if (random > 0.92) {
-    return { gesture: "sos", confidence: 0.7 + (Math.random() * 0.25) };
-  } else if (random > 0.88) {
-    return { gesture: "help", confidence: 0.7 + (Math.random() * 0.2) };
-  } else if (random > 0.85) {
-    return { gesture: "danger", confidence: 0.65 + (Math.random() * 0.3) };
-  } else if (random > 0.83) {
-    return { gesture: "medical", confidence: 0.6 + (Math.random() * 0.35) };
-  } else if (random > 0.8) {
-    return { gesture: "police", confidence: 0.75 + (Math.random() * 0.2) };
+  if (random > 0.85) {
+    // Only detect victory gesture with varying confidence
+    return { gesture: "victory", confidence: 0.7 + (Math.random() * 0.25) };
   } else {
     return { gesture: "none", confidence: 0.9 + (Math.random() * 0.1) };
   }
@@ -68,7 +59,7 @@ export const captureImage = (videoElement: HTMLVideoElement | null): string | nu
   ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
   ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
   ctx.fillStyle = "white";
-  ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 10);
+  ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 15);
   
   return canvas.toDataURL("image/jpeg", 0.8);
 };
@@ -94,12 +85,7 @@ export const downloadImage = (imageData: string | null, gesture: GestureType): b
 // Get a color based on the gesture type
 export const getGestureColor = (gesture: GestureType): string => {
   switch (gesture) {
-    case "sos": return "text-red-500";
-    case "help": return "text-orange-500";
-    case "danger": return "text-yellow-500";
-    case "medical": return "text-blue-500";
-    case "police": return "text-indigo-500";
-    case "manual": return "text-purple-500"; // Added color for manual gesture
+    case "victory": return "text-red-500";
     case "none": return "text-gray-500";
     default: return "text-gray-500";
   }
@@ -108,12 +94,7 @@ export const getGestureColor = (gesture: GestureType): string => {
 // Get a display name for the gesture type
 export const getGestureDisplayName = (gesture: GestureType): string => {
   switch (gesture) {
-    case "sos": return "SOS Emergency";
-    case "help": return "Help Needed";
-    case "danger": return "Danger Alert";
-    case "medical": return "Medical Assistance";
-    case "police": return "Police Required";
-    case "manual": return "Manual Capture"; // Added display name for manual gesture
+    case "victory": return "Victory Sign Emergency";
     case "none": return "No Gesture";
     default: return "Unknown";
   }
@@ -121,20 +102,22 @@ export const getGestureDisplayName = (gesture: GestureType): string => {
 
 // Mock function to generate alert history for demonstration purposes
 export const generateMockAlerts = (count: number = 10): GestureAlert[] => {
-  const gestures: GestureType[] = ["sos", "help", "danger", "medical", "police"];
   const alerts: GestureAlert[] = [];
   
   for (let i = 0; i < count; i++) {
-    const gesture = gestures[Math.floor(Math.random() * gestures.length)];
+    // Only generate victory gesture alerts
+    const gesture: GestureType = Math.random() > 0.3 ? "victory" : "none";
     
-    alerts.push({
-      id: `alert-${i}-${Date.now()}`,
-      timestamp: new Date(Date.now() - Math.random() * 86400000 * 7), // Random time in last 7 days
-      gestureType: gesture,
-      confidence: 0.7 + (Math.random() * 0.3),
-      location: "Camera Feed 1",
-      processed: Math.random() > 0.3, // 70% chance of being processed
-    });
+    if (gesture !== "none") {
+      alerts.push({
+        id: `alert-${i}-${Date.now()}`,
+        timestamp: new Date(Date.now() - Math.random() * 86400000 * 7), // Random time in last 7 days
+        gestureType: gesture,
+        confidence: 0.7 + (Math.random() * 0.3),
+        location: "Camera Feed 1",
+        processed: Math.random() > 0.3, // 70% chance of being processed
+      });
+    }
   }
   
   // Sort by timestamp (newest first)

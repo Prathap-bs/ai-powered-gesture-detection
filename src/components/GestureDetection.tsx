@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera } from "lucide-react";
@@ -51,8 +50,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // If we detect a significant gesture, notify and save alert
-      if (result.gesture !== "none" && result.confidence > 0.7) {
+      // If we detect a victory gesture with high confidence, notify and save alert
+      if (result.gesture === "victory" && result.confidence > 0.7) {
         const imageData = captureImage(videoRef);
         setLastCapturedImage(imageData);
         
@@ -72,22 +71,14 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
         
         // Show toast notification for high confidence alerts
         if (result.confidence > 0.8) {
-          // Auto-download for critical gestures
-          if (result.gesture === "sos" || result.gesture === "danger") {
-            const success = downloadImage(imageData, result.gesture);
-            
-            toast({
-              title: "⚠️ Emergency Gesture Detected",
-              description: `${getGestureDisplayName(result.gesture)} detected with high confidence. ${success ? 'Evidence image saved to downloads.' : ''}`,
-              variant: "destructive",
-            });
-          } else {
-            toast({
-              title: "Gesture Detected",
-              description: `${getGestureDisplayName(result.gesture)} detected with high confidence.`,
-              variant: "destructive",
-            });
-          }
+          // Auto-download for victory gestures
+          const success = downloadImage(imageData, result.gesture);
+          
+          toast({
+            title: "⚠️ Emergency Gesture Detected",
+            description: `Victory sign detected with high confidence. ${success ? 'Evidence image saved to downloads.' : ''}`,
+            variant: "destructive",
+          });
         }
       }
     } catch (error) {
@@ -194,7 +185,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       <CardHeader className="px-4 py-3 flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-sm font-medium flex items-center">
           <AlertTriangle className="w-4 h-4 mr-1.5" />
-          AI Gesture Detection
+          Victory Sign Detection
           
           <TooltipProvider>
             <Tooltip>
@@ -205,11 +196,9 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p className="text-xs">
-                  The AI system analyzes video feeds to detect emergency gestures.
+                  The AI system analyzes video feed to detect the "V" or Victory sign gesture.
                   <br />
-                  Current gestures: SOS, Help, Danger, Medical, Police
-                  <br />
-                  Critical gestures automatically save evidence.
+                  When detected, an emergency alert is triggered and evidence is captured.
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -285,29 +274,38 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                   </Button>
                 </div>
                 
-                <div className="grid grid-cols-2 gap-1 text-xs">
-                  {["sos", "help", "danger", "medical", "police"].map((gesture) => (
-                    <div 
-                      key={gesture}
-                      className={`
-                        border rounded-md p-2
-                        ${currentGesture === gesture ? 
-                          'border-primary/50 bg-primary/5' : 
-                          'border-border bg-background hover:bg-secondary/40'
-                        }
-                        transition-all
-                      `}
-                    >
-                      <div className="flex justify-between items-center">
-                        <span>{getGestureDisplayName(gesture as GestureType)}</span>
-                        <span 
-                          className={`h-2 w-2 rounded-full ${
-                            currentGesture === gesture ? 'bg-primary animate-pulse' : 'bg-gray-300'
-                          }`}
-                        ></span>
-                      </div>
+                <div className="flex flex-col gap-1 text-xs mt-2">
+                  <div className="text-center mb-2">
+                    <img 
+                      src="/lovable-uploads/9453398e-17d9-44af-a929-edc786769fdb.png" 
+                      alt="Victory sign gesture" 
+                      className="h-20 mx-auto mb-2"
+                    />
+                    <p className="font-semibold">Detecting "V" Sign</p>
+                    <p className="text-xs text-muted-foreground">
+                      Hold up index and middle finger to trigger emergency alert
+                    </p>
+                  </div>
+                  
+                  <div 
+                    className={`
+                      border rounded-md p-2
+                      ${currentGesture === "victory" ? 
+                        'border-primary/50 bg-primary/5' : 
+                        'border-border bg-background hover:bg-secondary/40'
+                      }
+                      transition-all
+                    `}
+                  >
+                    <div className="flex justify-between items-center">
+                      <span>Victory Sign Emergency</span>
+                      <span 
+                        className={`h-2 w-2 rounded-full ${
+                          currentGesture === "victory" ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                        }`}
+                      ></span>
                     </div>
-                  ))}
+                  </div>
                 </div>
               </div>
             </CardContent>
