@@ -1,0 +1,227 @@
+
+import React, { useState, useEffect, useRef } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AlertTriangle, ChevronUp, ChevronDown, Info } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
+import { 
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { 
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { toast } from "@/hooks/use-toast";
+import { 
+  detectGesture, 
+  captureImage, 
+  GestureType, 
+  GestureAlert,
+  getGestureColor,
+  getGestureDisplayName
+} from "@/utils/gestureUtils";
+
+type GestureDetectionProps = {
+  videoRef: HTMLVideoElement | null;
+  onGestureDetected?: (alert: GestureAlert) => void;
+};
+
+const GestureDetection: React.FC<GestureDetectionProps> = ({ 
+  videoRef,
+  onGestureDetected
+}) => {
+  const [detectionActive, setDetectionActive] = useState(true);
+  const [currentGesture, setCurrentGesture] = useState<GestureType>("none");
+  const [confidence, setConfidence] = useState(0);
+  const [isOpen, setIsOpen] = useState(true);
+  const detectionIntervalRef = useRef<number | null>(null);
+
+  const handleDetection = async () => {
+    if (!videoRef || !detectionActive) return;
+    
+    try {
+      const result = await detectGesture(videoRef);
+      setCurrentGesture(result.gesture);
+      setConfidence(result.confidence);
+      
+      // If we detect a significant gesture, notify and save alert
+      if (result.gesture !== "none" && result.confidence > 0.7) {
+        const imageData = captureImage(videoRef);
+        
+        const alert: GestureAlert = {
+          id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          timestamp: new Date(),
+          gestureType: result.gesture,
+          confidence: result.confidence,
+          imageData,
+          location: "Primary Camera",
+          processed: false
+        };
+        
+        if (onGestureDetected) {
+          onGestureDetected(alert);
+        }
+        
+        // Show toast notification for high confidence alerts
+        if (result.confidence > 0.8) {
+          toast({
+            title: "Gesture Detected",
+            description: `${getGestureDisplayName(result.gesture)} detected with high confidence.`,
+            variant: "destructive",
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error in gesture detection:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (detectionActive && videoRef) {
+      // Run detection every 1 second
+      detectionIntervalRef.current = window.setInterval(handleDetection, 1000);
+    }
+    
+    return () => {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+      }
+    };
+  }, [detectionActive, videoRef]);
+
+  const toggleDetection = () => {
+    setDetectionActive(!detectionActive);
+    
+    if (!detectionActive) {
+      toast({
+        title: "Gesture Detection Enabled",
+        description: "AI-powered gesture detection is now active.",
+      });
+    } else {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
+      }
+      
+      toast({
+        title: "Gesture Detection Disabled",
+        description: "AI-powered gesture detection is now paused.",
+      });
+    }
+  };
+
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence > 0.9) return "bg-green-500";
+    if (confidence > 0.7) return "bg-amber-500";
+    if (confidence > 0.5) return "bg-yellow-500";
+    return "bg-red-500";
+  };
+
+  return (
+    <Card className="overflow-hidden h-full flex flex-col">
+      <CardHeader className="px-4 py-3 flex flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-sm font-medium flex items-center">
+          <AlertTriangle className="w-4 h-4 mr-1.5" />
+          AI Gesture Detection
+          
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6 ml-1 hover:bg-transparent">
+                  <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                <p className="text-xs">
+                  The AI system analyzes video feeds to detect emergency gestures.
+                  <br />
+                  Current gestures: SOS, Help, Danger, Medical, Police
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </CardTitle>
+        <Collapsible
+          open={isOpen}
+          onOpenChange={setIsOpen}
+          className="w-auto"
+        >
+          <div className="flex items-center gap-1">
+            <Button 
+              onClick={toggleDetection}
+              variant={detectionActive ? "destructive" : "outline"} 
+              size="sm"
+              className="h-7 text-xs"
+            >
+              {detectionActive ? "Pause Detection" : "Start Detection"}
+            </Button>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7">
+                {isOpen ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </CollapsibleTrigger>
+          </div>
+          
+          <CollapsibleContent className="overflow-hidden">
+            <CardContent className="px-4 py-3 text-sm">
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-xs font-medium">Current Status:</span>
+                    <span 
+                      className={`text-xs font-semibold ${getGestureColor(currentGesture)}`}
+                    >
+                      {getGestureDisplayName(currentGesture)}
+                    </span>
+                  </div>
+                  <Progress 
+                    value={confidence * 100} 
+                    className={`h-2 ${getConfidenceColor(confidence)}`} 
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Confidence: {(confidence * 100).toFixed(1)}%
+                  </p>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-1 text-xs">
+                  {["sos", "help", "danger", "medical", "police"].map((gesture) => (
+                    <div 
+                      key={gesture}
+                      className={`
+                        border rounded-md p-2
+                        ${currentGesture === gesture ? 
+                          'border-primary/50 bg-primary/5' : 
+                          'border-border bg-background hover:bg-secondary/40'
+                        }
+                        transition-all
+                      `}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span>{getGestureDisplayName(gesture as GestureType)}</span>
+                        <span 
+                          className={`h-2 w-2 rounded-full ${
+                            currentGesture === gesture ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                          }`}
+                        ></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </CollapsibleContent>
+        </Collapsible>
+      </CardHeader>
+    </Card>
+  );
+};
+
+export default GestureDetection;
