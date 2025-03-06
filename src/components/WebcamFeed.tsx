@@ -2,7 +2,7 @@
 import React, { useRef, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FullScreen, Maximize2, Minimize2, Video, VideoOff } from "lucide-react";
+import { Fullscreen, Maximize2, Minimize2, Video, VideoOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 type WebcamFeedProps = {
