@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, ChevronUp, ChevronDown, Info } from "lucide-react";
+import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { 
@@ -15,10 +15,11 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { toast } from "@/hooks/use-toast";
+import { useToast } from "@/hooks/use-toast";
 import { 
   detectGesture, 
   captureImage, 
+  downloadImage,
   GestureType, 
   GestureAlert,
   getGestureColor,
@@ -38,7 +39,9 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const [currentGesture, setCurrentGesture] = useState<GestureType>("none");
   const [confidence, setConfidence] = useState(0);
   const [isOpen, setIsOpen] = useState(true);
+  const [lastCapturedImage, setLastCapturedImage] = useState<string | null>(null);
   const detectionIntervalRef = useRef<number | null>(null);
+  const { toast } = useToast();
 
   const handleDetection = async () => {
     if (!videoRef || !detectionActive) return;
@@ -51,6 +54,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       // If we detect a significant gesture, notify and save alert
       if (result.gesture !== "none" && result.confidence > 0.7) {
         const imageData = captureImage(videoRef);
+        setLastCapturedImage(imageData);
         
         const alert: GestureAlert = {
           id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -68,11 +72,22 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
         
         // Show toast notification for high confidence alerts
         if (result.confidence > 0.8) {
-          toast({
-            title: "Gesture Detected",
-            description: `${getGestureDisplayName(result.gesture)} detected with high confidence.`,
-            variant: "destructive",
-          });
+          // Auto-download for critical gestures
+          if (result.gesture === "sos" || result.gesture === "danger") {
+            const success = downloadImage(imageData, result.gesture);
+            
+            toast({
+              title: "⚠️ Emergency Gesture Detected",
+              description: `${getGestureDisplayName(result.gesture)} detected with high confidence. ${success ? 'Evidence image saved to downloads.' : ''}`,
+              variant: "destructive",
+            });
+          } else {
+            toast({
+              title: "Gesture Detected",
+              description: `${getGestureDisplayName(result.gesture)} detected with high confidence.`,
+              variant: "destructive",
+            });
+          }
         }
       }
     } catch (error) {
@@ -114,6 +129,59 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     }
   };
 
+  const handleManualCapture = () => {
+    if (!videoRef) {
+      toast({
+        title: "Capture Failed",
+        description: "Camera is not available.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    const imageData = captureImage(videoRef);
+    setLastCapturedImage(imageData);
+    
+    if (imageData) {
+      const success = downloadImage(imageData, "manual");
+      
+      toast({
+        title: "Manual Capture",
+        description: success 
+          ? "Image captured and saved to downloads." 
+          : "Image captured but download failed.",
+        variant: success ? "default" : "destructive",
+      });
+    } else {
+      toast({
+        title: "Capture Failed",
+        description: "Failed to capture image from camera.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDownloadLastImage = () => {
+    if (!lastCapturedImage) {
+      toast({
+        title: "Download Failed",
+        description: "No image has been captured yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    const success = downloadImage(lastCapturedImage, currentGesture);
+    
+    toast({
+      title: success ? "Image Downloaded" : "Download Failed",
+      description: success 
+        ? "The captured image has been saved to your downloads folder." 
+        : "Failed to download the image.",
+      variant: success ? "default" : "destructive",
+    });
+  };
+
   const getConfidenceColor = (confidence: number) => {
     if (confidence > 0.9) return "bg-green-500";
     if (confidence > 0.7) return "bg-amber-500";
@@ -140,6 +208,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                   The AI system analyzes video feeds to detect emergency gestures.
                   <br />
                   Current gestures: SOS, Help, Danger, Medical, Police
+                  <br />
+                  Critical gestures automatically save evidence.
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -189,6 +259,30 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                   <p className="text-xs text-muted-foreground mt-1">
                     Confidence: {(confidence * 100).toFixed(1)}%
                   </p>
+                </div>
+                
+                <div className="flex justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 flex items-center"
+                    onClick={handleManualCapture}
+                    disabled={!videoRef}
+                  >
+                    <Camera className="h-3 w-3 mr-1" /> 
+                    Capture Now
+                  </Button>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 flex items-center"
+                    onClick={handleDownloadLastImage}
+                    disabled={!lastCapturedImage}
+                  >
+                    <Download className="h-3 w-3 mr-1" /> 
+                    Save Last Image
+                  </Button>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-1 text-xs">

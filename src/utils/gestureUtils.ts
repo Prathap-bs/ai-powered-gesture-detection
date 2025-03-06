@@ -1,4 +1,3 @@
-
 // This file contains utility functions for gesture detection
 
 export type GestureType = 
@@ -62,7 +61,33 @@ export const captureImage = (videoElement: HTMLVideoElement | null): string | nu
   
   ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
   
+  // Add timestamp and gesture indicator
+  const timestamp = new Date().toLocaleString();
+  ctx.font = "16px Arial";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+  ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
+  ctx.fillStyle = "white";
+  ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 10);
+  
   return canvas.toDataURL("image/jpeg", 0.8);
+};
+
+// Function to download image
+export const downloadImage = (imageData: string | null, gesture: GestureType): boolean => {
+  if (!imageData) return false;
+  
+  try {
+    const link = document.createElement("a");
+    link.href = imageData;
+    link.download = `${gesture}-alert-${Date.now()}.jpg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    return true;
+  } catch (error) {
+    console.error("Error downloading image:", error);
+    return false;
+  }
 };
 
 // Get a color based on the gesture type
