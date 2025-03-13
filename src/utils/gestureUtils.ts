@@ -1,4 +1,5 @@
 // This file contains utility functions for gesture detection
+import * as XLSX from 'xlsx';
 
 export type GestureType = 
   | "victory" // V sign with index and middle finger
@@ -15,6 +16,10 @@ export type GestureAlert = {
   processed: boolean;
 };
 
+// Track the last detection time to implement cooldown
+let lastDetectionTime = 0;
+const DETECTION_COOLDOWN_MS = 5000; // 5 seconds cooldown between detections
+
 // Mock function to simulate gesture detection (in a real app, this would be ML-based)
 export const detectGesture = async (videoElement: HTMLVideoElement | null): Promise<{ 
   gesture: GestureType; 
@@ -26,14 +31,22 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
 
   // Simulate processing delay
   await new Promise(resolve => setTimeout(resolve, 500));
+  
+  const currentTime = Date.now();
+  
+  // Check if we're still in cooldown period after a successful detection
+  if (currentTime - lastDetectionTime < DETECTION_COOLDOWN_MS) {
+    return { gesture: "none", confidence: 0.99 };
+  }
 
   // For demo purposes, we'll make the random detection less frequent and with higher threshold
   // This will reduce false positives when no V sign is shown
   const random = Math.random();
   
-  // Lowering the frequency of false detections significantly (from 15% to 5%)
-  if (random > 0.95) {
+  // Even lower frequency of false detections (from 5% to 2%)
+  if (random > 0.98) {
     // Only detect victory gesture with high confidence when detected
+    lastDetectionTime = currentTime; // Update last detection time
     return { gesture: "victory", confidence: 0.85 + (Math.random() * 0.15) };
   } else {
     // Higher confidence for "none" state to avoid mistaken detections
@@ -125,4 +138,36 @@ export const generateMockAlerts = (count: number = 10): GestureAlert[] => {
   
   // Sort by timestamp (newest first)
   return alerts.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+};
+
+// Function to export alerts to Excel file
+export const exportAlertsToExcel = (alerts: GestureAlert[]): void => {
+  try {
+    // Prepare data for Excel export
+    const exportData = alerts.map(alert => ({
+      'Date': alert.timestamp.toLocaleDateString(),
+      'Time': alert.timestamp.toLocaleTimeString(),
+      'Type': getGestureDisplayName(alert.gestureType),
+      'Confidence': `${(alert.confidence * 100).toFixed(1)}%`,
+      'Location': alert.location || 'Unknown',
+      'Status': alert.processed ? 'Processed' : 'Unprocessed'
+    }));
+    
+    // Create a new workbook
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    
+    // Add worksheet to workbook
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Emergency Alerts');
+    
+    // Generate Excel file and trigger download
+    XLSX.writeFile(workbook, `emergency-alerts-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (error) {
+    console.error('Error exporting alerts to Excel:', error);
+  }
+};
+
+// Function to reset the detection cooldown (useful for testing)
+export const resetDetectionCooldown = (): void => {
+  lastDetectionTime = 0;
 };

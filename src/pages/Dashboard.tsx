@@ -6,9 +6,9 @@ import Navbar from "@/components/Navbar";
 import WebcamFeed from "@/components/WebcamFeed";
 import GestureDetection from "@/components/GestureDetection";
 import AlertHistory from "@/components/AlertHistory";
-import { GestureAlert, generateMockAlerts } from "@/utils/gestureUtils";
+import { GestureAlert, generateMockAlerts, exportAlertsToExcel } from "@/utils/gestureUtils";
 import { Button } from "@/components/ui/button";
-import { Plus, Camera } from "lucide-react";
+import { Plus, Camera, FileSpreadsheet } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -96,6 +96,24 @@ const Dashboard = () => {
     });
   };
 
+  const handleExportToExcel = () => {
+    if (alerts.length === 0) {
+      toast({
+        title: "No data to export",
+        description: "There are no alerts to export to Excel.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    exportAlertsToExcel(alerts);
+    
+    toast({
+      title: "Export Successful",
+      description: "Alert data has been exported to Excel file.",
+    });
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -114,15 +132,26 @@ const Dashboard = () => {
       <main className="flex-1 container py-4 md:py-6 flex flex-col">
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-2xl font-bold">Surveillance Dashboard</h1>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            className="flex items-center"
-            onClick={handleAddWebcam}
-          >
-            <Plus className="mr-1 h-4 w-4" />
-            <span>Add Camera</span>
-          </Button>
+          <div className="flex space-x-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="flex items-center"
+              onClick={handleExportToExcel}
+            >
+              <FileSpreadsheet className="mr-1 h-4 w-4" />
+              <span>Export to Excel</span>
+            </Button>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="flex items-center"
+              onClick={handleAddWebcam}
+            >
+              <Plus className="mr-1 h-4 w-4" />
+              <span>Add Camera</span>
+            </Button>
+          </div>
         </div>
       
         <div className={`grid ${isMobile ? 'grid-cols-1' : 'grid-cols-3'} gap-4 mb-4`}>

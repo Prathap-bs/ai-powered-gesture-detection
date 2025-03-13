@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera } from "lucide-react";
+import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { 
@@ -20,6 +20,7 @@ import {
   detectGesture, 
   captureImage, 
   downloadImage,
+  resetDetectionCooldown,
   GestureType, 
   GestureAlert,
   getGestureColor,
@@ -40,18 +41,21 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const [confidence, setConfidence] = useState(0);
   const [isOpen, setIsOpen] = useState(true);
   const [lastCapturedImage, setLastCapturedImage] = useState<string | null>(null);
+  const [cooldownActive, setCooldownActive] = useState(false);
+  const [cooldownProgress, setCooldownProgress] = useState(0);
   const detectionIntervalRef = useRef<number | null>(null);
+  const cooldownTimerRef = useRef<number | null>(null);
   const { toast } = useToast();
 
   const handleDetection = async () => {
-    if (!videoRef || !detectionActive) return;
+    if (!videoRef || !detectionActive || cooldownActive) return;
     
     try {
       const result = await detectGesture(videoRef);
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // Increased threshold to 0.85 (previously 0.7) to reduce false positives
+      // Increased threshold to 0.85 to reduce false positives
       if (result.gesture === "victory" && result.confidence > 0.85) {
         const imageData = captureImage(videoRef);
         setLastCapturedImage(imageData);
@@ -70,9 +74,12 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           onGestureDetected(alert);
         }
         
-        // Also increased this threshold to 0.9 (previously 0.8)
+        // Set cooldown after detection
+        setCooldownActive(true);
+        startCooldownTimer();
+        
+        // Automatic download for high confidence
         if (result.confidence > 0.9) {
-          // Auto-download for victory gestures
           const success = downloadImage(imageData, result.gesture);
           
           toast({
@@ -87,6 +94,52 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     }
   };
 
+  const startCooldownTimer = () => {
+    const cooldownDuration = 5000; // 5 seconds cooldown
+    const updateInterval = 50; // Update progress every 50ms
+    let elapsed = 0;
+    
+    // Clear any existing timer
+    if (cooldownTimerRef.current) {
+      clearInterval(cooldownTimerRef.current);
+    }
+    
+    // Start new timer
+    cooldownTimerRef.current = window.setInterval(() => {
+      elapsed += updateInterval;
+      const progress = (elapsed / cooldownDuration) * 100;
+      setCooldownProgress(progress);
+      
+      if (elapsed >= cooldownDuration) {
+        // End cooldown
+        setCooldownActive(false);
+        setCooldownProgress(0);
+        clearInterval(cooldownTimerRef.current!);
+        cooldownTimerRef.current = null;
+      }
+    }, updateInterval);
+  };
+
+  const resetCooldown = () => {
+    // Reset cooldown state
+    setCooldownActive(false);
+    setCooldownProgress(0);
+    
+    // Clear cooldown timer
+    if (cooldownTimerRef.current) {
+      clearInterval(cooldownTimerRef.current);
+      cooldownTimerRef.current = null;
+    }
+    
+    // Reset detection cooldown in utility
+    resetDetectionCooldown();
+    
+    toast({
+      title: "Detection Reset",
+      description: "Gesture detection cooldown has been reset.",
+    });
+  };
+
   useEffect(() => {
     if (detectionActive && videoRef) {
       // Run detection every 1 second
@@ -97,8 +150,11 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current);
       }
+      if (cooldownTimerRef.current) {
+        clearInterval(cooldownTimerRef.current);
+      }
     };
-  }, [detectionActive, videoRef]);
+  }, [detectionActive, videoRef, cooldownActive]);
 
   const toggleDetection = () => {
     setDetectionActive(!detectionActive);
@@ -250,6 +306,26 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     Confidence: {(confidence * 100).toFixed(1)}%
                   </p>
                 </div>
+                
+                {cooldownActive && (
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-xs font-medium">Cooldown:</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 w-5 p-0"
+                        onClick={resetCooldown}
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <Progress value={cooldownProgress} className="h-2 bg-blue-200" />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Detection paused for {((5 - (cooldownProgress / 20))).toFixed(1)}s
+                    </p>
+                  </div>
+                )}
                 
                 <div className="flex justify-between">
                   <Button
