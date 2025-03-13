@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { 
@@ -21,6 +20,7 @@ import {
   captureImage, 
   downloadImage,
   resetDetectionCooldown,
+  simulateModelTraining,
   GestureType, 
   GestureAlert,
   getGestureColor,
@@ -43,9 +43,42 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const [lastCapturedImage, setLastCapturedImage] = useState<string | null>(null);
   const [cooldownActive, setCooldownActive] = useState(false);
   const [cooldownProgress, setCooldownProgress] = useState(0);
+  const [isModelLoading, setIsModelLoading] = useState(false);
+  const [trainingProgress, setTrainingProgress] = useState(0);
   const detectionIntervalRef = useRef<number | null>(null);
   const cooldownTimerRef = useRef<number | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (videoRef) {
+      trainModel();
+    }
+  }, [videoRef]);
+
+  const trainModel = async () => {
+    setIsModelLoading(true);
+    setTrainingProgress(0);
+    
+    try {
+      await simulateModelTraining((progress) => {
+        setTrainingProgress(progress);
+      });
+      
+      toast({
+        title: "Model Trained",
+        description: "Hand gesture detection model is ready!",
+      });
+    } catch (error) {
+      console.error("Error training model:", error);
+      toast({
+        title: "Model Training Failed",
+        description: "Using fallback detection method",
+        variant: "destructive",
+      });
+    } finally {
+      setIsModelLoading(false);
+    }
+  };
 
   const handleDetection = async () => {
     if (!videoRef || !detectionActive || cooldownActive) return;
@@ -55,8 +88,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // Increased threshold to 0.85 to reduce false positives
-      if (result.gesture === "victory" && result.confidence > 0.85) {
+      if (result.gesture === "victory" && result.confidence > 0.7) {
         const imageData = captureImage(videoRef);
         setLastCapturedImage(imageData);
         
@@ -74,11 +106,9 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           onGestureDetected(alert);
         }
         
-        // Set cooldown after detection
         setCooldownActive(true);
         startCooldownTimer();
         
-        // Automatic download for high confidence
         if (result.confidence > 0.9) {
           const success = downloadImage(imageData, result.gesture);
           
@@ -99,19 +129,16 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     const updateInterval = 50; // Update progress every 50ms
     let elapsed = 0;
     
-    // Clear any existing timer
     if (cooldownTimerRef.current) {
       clearInterval(cooldownTimerRef.current);
     }
     
-    // Start new timer
     cooldownTimerRef.current = window.setInterval(() => {
       elapsed += updateInterval;
       const progress = (elapsed / cooldownDuration) * 100;
       setCooldownProgress(progress);
       
       if (elapsed >= cooldownDuration) {
-        // End cooldown
         setCooldownActive(false);
         setCooldownProgress(0);
         clearInterval(cooldownTimerRef.current!);
@@ -121,17 +148,14 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   };
 
   const resetCooldown = () => {
-    // Reset cooldown state
     setCooldownActive(false);
     setCooldownProgress(0);
     
-    // Clear cooldown timer
     if (cooldownTimerRef.current) {
       clearInterval(cooldownTimerRef.current);
       cooldownTimerRef.current = null;
     }
     
-    // Reset detection cooldown in utility
     resetDetectionCooldown();
     
     toast({
@@ -142,8 +166,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
 
   useEffect(() => {
     if (detectionActive && videoRef) {
-      // Run detection every 1 second
-      detectionIntervalRef.current = window.setInterval(handleDetection, 1000);
+      detectionIntervalRef.current = window.setInterval(handleDetection, 500);
     }
     
     return () => {
@@ -272,6 +295,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
               variant={detectionActive ? "destructive" : "outline"} 
               size="sm"
               className="h-7 text-xs"
+              disabled={isModelLoading}
             >
               {detectionActive ? "Pause Detection" : "Start Detection"}
             </Button>
@@ -289,23 +313,37 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           <CollapsibleContent className="overflow-hidden">
             <CardContent className="px-4 py-3 text-sm">
               <div className="space-y-4">
-                <div>
-                  <div className="flex justify-between mb-1">
-                    <span className="text-xs font-medium">Current Status:</span>
-                    <span 
-                      className={`text-xs font-semibold ${getGestureColor(currentGesture)}`}
-                    >
-                      {getGestureDisplayName(currentGesture)}
-                    </span>
+                {isModelLoading ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium">Training ML Model:</span>
+                      <span className="text-xs font-medium">{trainingProgress.toFixed(0)}%</span>
+                    </div>
+                    <Progress value={trainingProgress} className="h-2 bg-blue-200" />
+                    <p className="text-xs text-muted-foreground mt-1 flex items-center">
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      Loading gesture recognition model...
+                    </p>
                   </div>
-                  <Progress 
-                    value={confidence * 100} 
-                    className={`h-2 ${getConfidenceColor(confidence)}`} 
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Confidence: {(confidence * 100).toFixed(1)}%
-                  </p>
-                </div>
+                ) : (
+                  <div>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-xs font-medium">Current Status:</span>
+                      <span 
+                        className={`text-xs font-semibold ${getGestureColor(currentGesture)}`}
+                      >
+                        {getGestureDisplayName(currentGesture)}
+                      </span>
+                    </div>
+                    <Progress 
+                      value={confidence * 100} 
+                      className={`h-2 ${getConfidenceColor(confidence)}`} 
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Confidence: {(confidence * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                )}
                 
                 {cooldownActive && (
                   <div>
@@ -333,10 +371,21 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     size="sm"
                     className="text-xs h-7 flex items-center"
                     onClick={handleManualCapture}
-                    disabled={!videoRef}
+                    disabled={!videoRef || isModelLoading}
                   >
                     <Camera className="h-3 w-3 mr-1" /> 
                     Capture Now
+                  </Button>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7 flex items-center"
+                    onClick={trainModel}
+                    disabled={isModelLoading}
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${isModelLoading ? 'animate-spin' : ''}`} /> 
+                    Retrain Model
                   </Button>
                   
                   <Button
@@ -347,7 +396,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     disabled={!lastCapturedImage}
                   >
                     <Download className="h-3 w-3 mr-1" /> 
-                    Save Last Image
+                    Save Image
                   </Button>
                 </div>
                 
