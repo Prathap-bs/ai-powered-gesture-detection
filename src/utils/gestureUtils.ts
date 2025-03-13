@@ -20,7 +20,7 @@ export type GestureAlert = {
 let lastDetectionTime = 0;
 const DETECTION_COOLDOWN_MS = 5000; // 5 seconds cooldown between detections
 
-// Mock function to simulate gesture detection (in a real app, this would be ML-based)
+// Improved mock function to simulate better gesture detection
 export const detectGesture = async (videoElement: HTMLVideoElement | null): Promise<{ 
   gesture: GestureType; 
   confidence: number; 
@@ -29,8 +29,8 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
     return { gesture: "none", confidence: 0 };
   }
 
-  // Simulate processing delay
-  await new Promise(resolve => setTimeout(resolve, 500));
+  // Simulate processing delay (reduced from 500ms to 150ms for faster response)
+  await new Promise(resolve => setTimeout(resolve, 150));
   
   const currentTime = Date.now();
   
@@ -39,18 +39,27 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
     return { gesture: "none", confidence: 0.99 };
   }
 
-  // For demo purposes, we'll make the random detection less frequent and with higher threshold
-  // This will reduce false positives when no V sign is shown
+  // To simulate a more trained model, we'll use a different approach:
+  // In a real ML model, we would analyze pixel data here
+  
+  // Increased response rate (now 1% chance of detection instead of previous 2%)
+  // This simulates a more sensitive but still controlled detection rate
+  const detectionThreshold = 0.99; // 1% chance of detection on each frame
   const random = Math.random();
   
-  // Even lower frequency of false detections (from 5% to 2%)
-  if (random > 0.98) {
-    // Only detect victory gesture with high confidence when detected
+  if (random > detectionThreshold) {
+    // When detected, always use high confidence to simulate a well-trained model
     lastDetectionTime = currentTime; // Update last detection time
-    return { gesture: "victory", confidence: 0.85 + (Math.random() * 0.15) };
+    return { 
+      gesture: "victory", 
+      confidence: 0.92 + (Math.random() * 0.08) // Higher confidence range (92-100%)
+    };
   } else {
     // Higher confidence for "none" state to avoid mistaken detections
-    return { gesture: "none", confidence: 0.95 + (Math.random() * 0.05) };
+    return { 
+      gesture: "none", 
+      confidence: 0.98 + (Math.random() * 0.02) // Very high confidence for "none" (98-100%)
+    };
   }
 };
 
@@ -67,15 +76,26 @@ export const captureImage = (videoElement: HTMLVideoElement | null): string | nu
   
   ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
   
-  // Add timestamp and gesture indicator
+  // Enhanced metadata overlay on captured images
   const timestamp = new Date().toLocaleString();
-  ctx.font = "16px Arial";
-  ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-  ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
-  ctx.fillStyle = "white";
-  ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 15);
+  const location = "Primary Camera";
   
-  return canvas.toDataURL("image/jpeg", 0.8);
+  // Add black semi-transparent overlay at the bottom
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.fillRect(0, canvas.height - 60, canvas.width, 60);
+  
+  // Add timestamp and location info
+  ctx.font = "bold 16px Arial";
+  ctx.fillStyle = "white";
+  ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 35);
+  ctx.fillText(`Location: ${location}`, 10, canvas.height - 15);
+  
+  // Add "EMERGENCY ALERT" text for victory gestures
+  ctx.font = "bold 20px Arial";
+  ctx.fillStyle = "red";
+  ctx.fillText("EMERGENCY ALERT - V SIGN DETECTED", 10, canvas.height - 60);
+  
+  return canvas.toDataURL("image/jpeg", 0.9); // Higher quality (0.9) for better evidence
 };
 
 // Function to download image
@@ -119,21 +139,20 @@ export const getGestureDisplayName = (gesture: GestureType): string => {
 // Mock function to generate alert history for demonstration purposes
 export const generateMockAlerts = (count: number = 10): GestureAlert[] => {
   const alerts: GestureAlert[] = [];
+  const locations = ["Main Entrance", "Reception Area", "Parking Lot", "Hallway Camera", "Primary Camera"];
   
   for (let i = 0; i < count; i++) {
     // Only generate victory gesture alerts
-    const gesture: GestureType = Math.random() > 0.3 ? "victory" : "none";
+    const gesture: GestureType = Math.random() > 0.3 ? "victory" : "manual";
     
-    if (gesture !== "none") {
-      alerts.push({
-        id: `alert-${i}-${Date.now()}`,
-        timestamp: new Date(Date.now() - Math.random() * 86400000 * 7), // Random time in last 7 days
-        gestureType: gesture,
-        confidence: 0.7 + (Math.random() * 0.3),
-        location: "Camera Feed 1",
-        processed: Math.random() > 0.3, // 70% chance of being processed
-      });
-    }
+    alerts.push({
+      id: `alert-${i}-${Date.now()}`,
+      timestamp: new Date(Date.now() - Math.random() * 86400000 * 7), // Random time in last 7 days
+      gestureType: gesture,
+      confidence: 0.85 + (Math.random() * 0.15), // Higher confidence (85-100%)
+      location: locations[Math.floor(Math.random() * locations.length)],
+      processed: Math.random() > 0.3, // 70% chance of being processed
+    });
   }
   
   // Sort by timestamp (newest first)
