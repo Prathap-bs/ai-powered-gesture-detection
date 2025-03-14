@@ -1,7 +1,6 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw, Loader2, Settings } from "lucide-react";
+import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { 
@@ -47,7 +46,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const [cooldownProgress, setCooldownProgress] = useState(0);
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
-  const [sensitivity, setSensitivity] = useState<'low' | 'medium' | 'high'>('medium');
+  const [sensitivity, setSensitivity] = useState<'low' | 'medium' | 'high'>('high');
   const [consecutiveFrames, setConsecutiveFrames] = useState(0);
   const detectionIntervalRef = useRef<number | null>(null);
   const cooldownTimerRef = useRef<number | null>(null);
@@ -71,7 +70,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       
       toast({
         title: "Model Trained",
-        description: "Hand gesture detection model is ready!",
+        description: "Super-fast hand gesture detection model is ready!",
       });
     } catch (error) {
       console.error("Error training model:", error);
@@ -93,12 +92,14 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // Only count consecutive frames for victory gesture
-      if (result.gesture === "victory" && result.confidence > 0.65) {
+      if (result.gesture === "victory" && result.confidence > 0.6) {
         setConsecutiveFrames(prev => prev + 1);
         
-        // After enough consecutive frames with high confidence, trigger the alert
-        if (result.confidence > 0.75 && consecutiveFrames >= (sensitivity === 'low' ? 3 : sensitivity === 'medium' ? 2 : 1)) {
+        if (result.confidence > 0.7 && (
+            (sensitivity === 'low' && consecutiveFrames >= 2) || 
+            (sensitivity === 'medium' && consecutiveFrames >= 1) ||
+            (sensitivity === 'high')
+        )) {
           const imageData = captureImage(videoRef);
           setLastCapturedImage(imageData);
           
@@ -120,8 +121,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           startCooldownTimer();
           setConsecutiveFrames(0);
           
-          // Auto download for high confidence
-          if (result.confidence > 0.85) {
+          if (result.confidence > 0.8) {
             const success = downloadImage(imageData, result.gesture);
             
             toast({
@@ -132,7 +132,6 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           }
         }
       } else {
-        // Reset consecutive frame counter if not a victory gesture or low confidence
         setConsecutiveFrames(0);
       }
     } catch (error) {
@@ -141,8 +140,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   };
 
   const startCooldownTimer = () => {
-    const cooldownDuration = 3000; // 3 seconds cooldown
-    const updateInterval = 50; // Update progress every 50ms
+    const cooldownDuration = 2000;
+    const updateInterval = 50;
     let elapsed = 0;
     
     if (cooldownTimerRef.current) {
@@ -184,8 +183,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
 
   useEffect(() => {
     if (detectionActive && videoRef) {
-      // Faster detection rate for better responsiveness
-      detectionIntervalRef.current = window.setInterval(handleDetection, 150);
+      detectionIntervalRef.current = window.setInterval(handleDetection, 60);
     }
     
     return () => {
@@ -205,7 +203,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     if (!detectionActive) {
       toast({
         title: "Gesture Detection Enabled",
-        description: "AI-powered gesture detection is now active.",
+        description: "Super-fast AI-powered gesture detection is now active.",
       });
     } else {
       if (detectionIntervalRef.current) {
@@ -296,7 +294,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       <CardHeader className="px-4 py-3 flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-sm font-medium flex items-center">
           <AlertTriangle className="w-4 h-4 mr-1.5" />
-          Victory Sign Detection
+          Ultra-Fast Victory Sign Detection
           
           <TooltipProvider>
             <Tooltip>
@@ -307,7 +305,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p className="text-xs">
-                  The AI system analyzes video feed to detect the "V" or Victory sign gesture.
+                  The optimized AI system detects the "V" sign gesture with ultra-fast response.
                   <br />
                   When detected, an emergency alert is triggered and evidence is captured.
                 </p>
@@ -353,7 +351,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     <Progress value={trainingProgress} className="h-2 bg-blue-200" />
                     <p className="text-xs text-muted-foreground mt-1 flex items-center">
                       <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      Loading gesture recognition model...
+                      Loading optimized gesture recognition model...
                     </p>
                   </div>
                 ) : (
@@ -374,7 +372,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                       <span>Confidence: {(confidence * 100).toFixed(1)}%</span>
                       {consecutiveFrames > 0 && currentGesture === "victory" && (
                         <span className="text-primary font-medium">
-                          Detecting: {consecutiveFrames}/{sensitivity === 'low' ? '3' : sensitivity === 'medium' ? '2' : '1'}
+                          Detecting: {consecutiveFrames}/{sensitivity === 'low' ? '2' : sensitivity === 'medium' ? '1' : '1'}
                         </span>
                       )}
                     </div>
@@ -396,7 +394,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     </div>
                     <Progress value={cooldownProgress} className="h-2 bg-blue-200" />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Detection paused for {((3 - (cooldownProgress / 33.3))).toFixed(1)}s
+                      Detection paused for {((2 - (cooldownProgress / 50))).toFixed(1)}s
                     </p>
                   </div>
                 )}

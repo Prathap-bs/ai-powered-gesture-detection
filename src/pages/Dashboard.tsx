@@ -6,9 +6,9 @@ import Navbar from "@/components/Navbar";
 import WebcamFeed from "@/components/WebcamFeed";
 import GestureDetection from "@/components/GestureDetection";
 import AlertHistory from "@/components/AlertHistory";
-import { GestureAlert, generateMockAlerts, exportAlertsToExcel } from "@/utils/gestureUtils";
+import { GestureAlert, generateMockAlerts, exportAlertsToExcel, resetDetectionCooldown } from "@/utils/gestureUtils";
 import { Button } from "@/components/ui/button";
-import { Plus, Camera, FileSpreadsheet } from "lucide-react";
+import { Plus, Camera, FileSpreadsheet, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -55,7 +55,7 @@ const Dashboard = () => {
       setAlerts(prev => [alert, ...prev]);
       
       // Only show toast for victory gesture with high confidence
-      if (alert.gestureType === "victory" && alert.confidence > 0.9) {
+      if (alert.gestureType === "victory" && alert.confidence > 0.8) {
         toast({
           title: "Emergency Gesture Detected!",
           description: `A Victory sign was detected on camera with ${(alert.confidence * 100).toFixed(0)}% confidence.`,
@@ -113,6 +113,15 @@ const Dashboard = () => {
       description: "Alert data has been exported to Excel file.",
     });
   };
+  
+  const handleResetDetection = () => {
+    resetDetectionCooldown();
+    
+    toast({
+      title: "Detection Reset",
+      description: "Gesture detection system has been reset.",
+    });
+  };
 
   if (isLoading) {
     return (
@@ -133,6 +142,15 @@ const Dashboard = () => {
         <div className="flex justify-between items-center mb-4">
           <h1 className="text-2xl font-bold">Surveillance Dashboard</h1>
           <div className="flex space-x-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="flex items-center"
+              onClick={handleResetDetection}
+            >
+              <RefreshCw className="mr-1 h-4 w-4" />
+              <span>Reset Detection</span>
+            </Button>
             <Button 
               variant="outline" 
               size="sm" 
