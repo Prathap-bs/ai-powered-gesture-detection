@@ -132,7 +132,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           }
         }
       } else {
-        // Reset consecutive frame counter
+        // Reset consecutive frame counter if not a victory gesture or low confidence
         setConsecutiveFrames(0);
       }
     } catch (error) {
