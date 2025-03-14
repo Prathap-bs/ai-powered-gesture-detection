@@ -1,4 +1,3 @@
-
 // This file contains utility functions for gesture detection
 import * as XLSX from 'xlsx';
 import { env } from '@huggingface/transformers';
@@ -23,380 +22,27 @@ env.allowLocalModels = false;
 env.useBrowserCache = true;
 env.backends.onnx.wasm.numThreads = 4;
 
-// Track the last detection time to implement cooldown
+// Reduce detection cooldown for faster response
 let lastDetectionTime = 0;
-const DETECTION_COOLDOWN_MS = 1000; // 1 second cooldown between detections
+const DETECTION_COOLDOWN_MS = 500; // Reduce to 500ms for faster detection
 
-// In-memory model cache - Use TensorFlow.js for hand pose detection
-let handPoseDetector: any = null;
+// Track frame history for better accuracy
+const frameHistory: boolean[] = [];
+const FRAME_HISTORY_SIZE = 3;
+const REQUIRED_POSITIVE_FRAMES = 2;
 
-// Tracking consecutive detection frames to reduce false positives
-let consecutiveVictoryDetections = 0;
-const REQUIRED_CONSECUTIVE_DETECTIONS = 2; // Require multiple consecutive detections
-
-// Sensitivity settings
+// Advanced sensitivity settings for better accuracy
 let sensitivitySettings = {
-  skin_threshold: 0.35, // Medium default
-  v_confidence_threshold: 0.7, // Medium default
-  min_skin_ratio: 0.15,
-  max_skin_ratio: 0.4,
-  consecutive_frames: 2
+  skinThreshold: 0.35,
+  edgeThreshold: 0.3,
+  minConfidence: 0.75,
+  maxConfidence: 0.95,
+  minSkinRatio: 0.1,
+  maxSkinRatio: 0.4,
+  frameThreshold: 2
 };
 
-// Local ML model using pure JS image analysis
-// This is fallback when external models fail
-const loadLocalHandDetector = async () => {
-  console.log("Loading local hand detection model...");
-  
-  // This function will analyze an image for skin tones and hand-like shapes
-  // without requiring external API access
-  return {
-    detect: (imageData: string): Promise<{ 
-      gesture: string; 
-      confidence: number;
-      landmarks?: number[][];
-    }> => {
-      return new Promise((resolve) => {
-        // Create an image to analyze
-        const img = new Image();
-        img.src = imageData;
-        
-        img.onload = () => {
-          // Create canvas for analysis
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            resolve({ gesture: "none", confidence: 0 });
-            return;
-          }
-          
-          // Set canvas size to match image
-          canvas.width = img.width;
-          canvas.height = img.height;
-          
-          // Draw image to canvas for pixel analysis
-          ctx.drawImage(img, 0, 0);
-          
-          // Get image data for analysis
-          const imageDataObj = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const data = imageDataObj.data;
-          
-          // Check if image is too dark (black screen)
-          const isDarkImage = isImageTooDark(data);
-          if (isDarkImage) {
-            consecutiveVictoryDetections = 0; // Reset detection counter
-            resolve({ gesture: "none", confidence: 0.99 });
-            return;
-          }
-          
-          // Analyze image for hand and V shape
-          const { hasHand, hasPossibleVShape, confidence } = analyzeForHandAndVShape(data, canvas.width, canvas.height);
-          
-          if (hasHand && hasPossibleVShape) {
-            // Increase consecutive detection counter
-            consecutiveVictoryDetections++;
-            
-            // Only consider it a valid detection if we have enough consecutive frames
-            if (consecutiveVictoryDetections >= sensitivitySettings.consecutive_frames) {
-              resolve({ 
-                gesture: "victory", 
-                confidence: Math.min(0.7 + (confidence * 0.3), 0.99) 
-              });
-            } else {
-              // Not enough consecutive detections yet
-              resolve({ 
-                gesture: "none", 
-                confidence: 0.5 + (confidence * 0.2)
-              });
-            }
-          } else {
-            // Reset consecutive detection counter
-            consecutiveVictoryDetections = 0;
-            
-            if (hasHand) {
-              resolve({ 
-                gesture: "none", 
-                confidence: 0.7 
-              });
-            } else {
-              resolve({ 
-                gesture: "none", 
-                confidence: 0.99 
-              });
-            }
-          }
-        };
-        
-        img.onerror = () => {
-          resolve({ gesture: "none", confidence: 0 });
-        };
-      });
-    }
-  };
-};
-
-// Function to check if an image is too dark (black screen)
-const isImageTooDark = (data: Uint8ClampedArray): boolean => {
-  let totalPixels = data.length / 4; // RGBA values
-  let darkPixels = 0;
-  
-  // Sample every 10th pixel for performance
-  for (let i = 0; i < data.length; i += 40) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    
-    // Calculate brightness (simple average)
-    const brightness = (r + g + b) / 3;
-    
-    if (brightness < 30) { // Very dark pixel
-      darkPixels++;
-    }
-  }
-  
-  // Calculate percentage of dark pixels
-  const darkRatio = darkPixels / (totalPixels / 10);
-  
-  // If more than 90% of sampled pixels are dark, consider it a black screen
-  return darkRatio > 0.9;
-};
-
-// Function to analyze image for hand and V shape
-const analyzeForHandAndVShape = (
-  data: Uint8ClampedArray, 
-  width: number, 
-  height: number
-): { hasHand: boolean; hasPossibleVShape: boolean; confidence: number } => {
-  // Initialize skin detection grid
-  const gridSize = 16; // 16x16 grid
-  const cellWidth = Math.floor(width / gridSize);
-  const cellHeight = Math.floor(height / gridSize);
-  const skinGrid: number[][] = Array(gridSize).fill(0).map(() => Array(gridSize).fill(0));
-  
-  // Skin detection - populate grid with skin likelihood
-  for (let y = 0; y < gridSize; y++) {
-    for (let x = 0; x < gridSize; x++) {
-      const startX = x * cellWidth;
-      const startY = y * cellHeight;
-      
-      let skinPixels = 0;
-      let totalSampled = 0;
-      
-      // Sample pixels in this grid cell
-      for (let sy = 0; sy < cellHeight; sy += 4) {
-        for (let sx = 0; sx < cellWidth; sx += 4) {
-          const pixelX = startX + sx;
-          const pixelY = startY + sy;
-          
-          if (pixelX < width && pixelY < height) {
-            const i = (pixelY * width + pixelX) * 4;
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            
-            // Simple skin tone detection
-            if (isSkinTone(r, g, b)) {
-              skinPixels++;
-            }
-            
-            totalSampled++;
-          }
-        }
-      }
-      
-      // Calculate skin ratio for this cell
-      if (totalSampled > 0) {
-        skinGrid[y][x] = skinPixels / totalSampled;
-      }
-    }
-  }
-  
-  // Analyze grid pattern for hand shapes
-  const { hasHand, handConfidence } = detectHandInGrid(skinGrid);
-  
-  // If we have a hand, check for V shape pattern
-  let vShapeConfidence = 0;
-  let hasPossibleVShape = false;
-  
-  if (hasHand) {
-    const vShapeResult = detectVShapeInGrid(skinGrid);
-    hasPossibleVShape = vShapeResult.hasVShape;
-    vShapeConfidence = vShapeResult.confidence;
-  }
-  
-  return { 
-    hasHand, 
-    hasPossibleVShape, 
-    confidence: hasPossibleVShape ? vShapeConfidence : handConfidence 
-  };
-};
-
-// Check if a color is skin tone
-const isSkinTone = (r: number, g: number, b: number): boolean => {
-  // Simple skin tone detection based on RGB ranges
-  const sum = r + g + b;
-  
-  // Avoid black or very dark pixels
-  if (sum < 100) return false;
-  
-  // Skin tone usually has higher red component
-  if (r < g || r < b) return false;
-  
-  // Common skin tone ratios
-  const rg_ratio = r / g;
-  const rb_ratio = r / b;
-  
-  return (
-    rg_ratio > 1.0 && 
-    rg_ratio < 3.0 && 
-    rb_ratio > 1.0 && 
-    rb_ratio < 3.0 &&
-    g > 40 && 
-    b > 20
-  );
-};
-
-// Detect hand in grid based on skin tone patterns
-const detectHandInGrid = (grid: number[][]): { hasHand: boolean; handConfidence: number } => {
-  const gridSize = grid.length;
-  let skinCells = 0;
-  let totalCells = gridSize * gridSize;
-  let connectedRegions = 0;
-  
-  // Count skin cells and look for connected regions
-  for (let y = 0; y < gridSize; y++) {
-    for (let x = 0; x < gridSize; x++) {
-      if (grid[y][x] > sensitivitySettings.skin_threshold) { // Cell has significant skin tone
-        skinCells++;
-        
-        // Check for connected regions (simple connectivity check)
-        let hasNeighbor = false;
-        if (x > 0 && grid[y][x-1] > sensitivitySettings.skin_threshold) hasNeighbor = true;
-        if (y > 0 && grid[y-1][x] > sensitivitySettings.skin_threshold) hasNeighbor = true;
-        
-        if (!hasNeighbor) {
-          connectedRegions++;
-        }
-      }
-    }
-  }
-  
-  // Calculate ratios
-  const skinRatio = skinCells / totalCells;
-  
-  // A hand typically occupies 10-40% of the frame
-  const hasHand = skinRatio > sensitivitySettings.min_skin_ratio && 
-                  skinRatio < sensitivitySettings.max_skin_ratio && 
-                  connectedRegions < 8;
-  
-  // Calculate confidence based on ratios
-  let handConfidence = 0;
-  if (hasHand) {
-    // Confidence is higher when skin ratio is in the typical hand range
-    if (skinRatio > 0.15 && skinRatio < 0.4) {
-      handConfidence = 0.7 + (0.3 * (1 - Math.abs(0.25 - skinRatio) / 0.15));
-    } else {
-      handConfidence = 0.5;
-    }
-  }
-  
-  return { hasHand, handConfidence };
-};
-
-// Detect V shape pattern in the grid
-const detectVShapeInGrid = (grid: number[][]): { hasVShape: boolean; confidence: number } => {
-  const gridSize = grid.length;
-  
-  // Calculate gradients to find edges
-  const edgeMap: number[][] = Array(gridSize-1).fill(0).map(() => Array(gridSize-1).fill(0));
-  
-  for (let y = 0; y < gridSize-1; y++) {
-    for (let x = 0; x < gridSize-1; x++) {
-      const gradient = Math.abs(grid[y][x] - grid[y+1][x]) + 
-                     Math.abs(grid[y][x] - grid[y][x+1]);
-      
-      // Edges have high gradients between skin and non-skin regions
-      edgeMap[y][x] = gradient > 0.3 ? 1 : 0;
-    }
-  }
-  
-  // Look for V-like patterns in the edge map
-  let vShapeScore = 0;
-  
-  // Improved V pattern detection using edge symmetry and divergence
-  for (let y = Math.floor(gridSize/2); y < gridSize-2; y++) {
-    for (let x = 2; x < gridSize-3; x++) {
-      // Look for diverging edges in a rough V pattern
-      const leftArm = checkLineSegment(edgeMap, x, y, -1, -1, Math.min(5, x));
-      const rightArm = checkLineSegment(edgeMap, x, y, 1, -1, Math.min(5, gridSize-x-1));
-      
-      // Check for gap between fingers (important for V sign)
-      const centerGap = checkGapBetweenFingers(grid, x, y);
-      
-      if (leftArm > 2 && rightArm > 2 && centerGap) {
-        vShapeScore += (leftArm + rightArm) / 10;
-      }
-    }
-  }
-  
-  const hasVShape = vShapeScore > sensitivitySettings.v_confidence_threshold;
-  const confidence = Math.min(0.5 + (vShapeScore / 4), 0.95);
-  
-  return { hasVShape, confidence };
-};
-
-// Check for a gap between fingers (important for V sign)
-const checkGapBetweenFingers = (grid: number[][], centerX: number, bottomY: number): boolean => {
-  // Check a vertical line going up from the bottom point
-  let gapFound = false;
-  let skinFound = 0;
-  
-  for (let y = bottomY; y >= Math.max(0, bottomY - 6); y--) {
-    // Skip if we're out of bounds
-    if (centerX < 0 || centerX >= grid[0].length || y < 0 || y >= grid.length) continue;
-    
-    // If we find minimal skin in the center, that's good for a V sign
-    if (grid[y][centerX] < 0.2) {
-      gapFound = true;
-    } else if (grid[y][centerX] > 0.3) {
-      skinFound++;
-    }
-  }
-  
-  // For a V sign, we want a gap in the center but some skin to the sides
-  return gapFound && skinFound < 3;
-};
-
-// Check for line segments in the edge map (for V detection)
-const checkLineSegment = (
-  edgeMap: number[][], 
-  startX: number, 
-  startY: number, 
-  dirX: number, 
-  dirY: number, 
-  maxLength: number
-): number => {
-  let count = 0;
-  let x = startX;
-  let y = startY;
-  
-  for (let i = 0; i < maxLength; i++) {
-    x += dirX;
-    y += dirY;
-    
-    if (y < 0 || y >= edgeMap.length || x < 0 || x >= edgeMap[0].length) {
-      break;
-    }
-    
-    if (edgeMap[y][x] > 0) {
-      count++;
-    }
-  }
-  
-  return count;
-};
-
-// Enhanced ML hand gesture detection
+// Enhanced detection function with multi-frame validation
 export const detectGesture = async (videoElement: HTMLVideoElement | null): Promise<{ 
   gesture: GestureType; 
   confidence: number; 
@@ -406,41 +52,318 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
   }
 
   const currentTime = Date.now();
-  
-  // Check if we're still in cooldown period after a successful detection
   if (currentTime - lastDetectionTime < DETECTION_COOLDOWN_MS) {
     return { gesture: "none", confidence: 0.99 };
   }
 
   try {
-    // Capture current video frame
-    const imageData = captureImageForProcessing(videoElement);
-    if (!imageData) {
+    const frame = captureImageForProcessing(videoElement);
+    if (!frame) {
       return { gesture: "none", confidence: 0.5 };
     }
+
+    const result = await analyzeFrame(frame);
     
-    // Initialize or get the hand detector
-    if (!handPoseDetector) {
-      handPoseDetector = await loadLocalHandDetector();
+    // Update frame history
+    frameHistory.push(result.isVictory);
+    if (frameHistory.length > FRAME_HISTORY_SIZE) {
+      frameHistory.shift();
     }
-    
-    // Use our local ML model to detect hand gestures
-    const result = await handPoseDetector.detect(imageData);
-    
-    // Process the detection result
-    if (result.gesture === "victory" && result.confidence > 0.65) {
-      console.log("Victory gesture detected with confidence:", result.confidence);
+
+    // Count positive detections in history
+    const positiveFrames = frameHistory.filter(Boolean).length;
+
+    if (positiveFrames >= REQUIRED_POSITIVE_FRAMES && result.confidence > sensitivitySettings.minConfidence) {
       lastDetectionTime = currentTime;
-      return { gesture: "victory", confidence: result.confidence };
+      return { 
+        gesture: "victory", 
+        confidence: Math.min(result.confidence, sensitivitySettings.maxConfidence) 
+      };
     }
-    
-    // No victory gesture detected
-    return { gesture: "none", confidence: result.confidence > 0.5 ? result.confidence : 0.98 };
+
+    return { 
+      gesture: "none", 
+      confidence: result.confidence 
+    };
   } catch (error) {
-    console.error("Error in ML gesture detection:", error);
-    // Return no gesture on error
+    console.error("Error in gesture detection:", error);
     return { gesture: "none", confidence: 0.99 };
   }
+};
+
+// Advanced frame analysis function
+const analyzeFrame = async (imageData: string): Promise<{
+  isVictory: boolean;
+  confidence: number;
+}> => {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const img = new Image();
+  
+  return new Promise((resolve) => {
+    img.onload = () => {
+      if (!ctx) {
+        resolve({ isVictory: false, confidence: 0 });
+        return;
+      }
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const result = processImageData(imageData);
+      resolve(result);
+    };
+    
+    img.src = imageData;
+  });
+};
+
+// Enhanced image processing with improved accuracy
+const processImageData = (imageData: ImageData): {
+  isVictory: boolean;
+  confidence: number;
+} => {
+  const { data, width, height } = imageData;
+  
+  // Check if image is too dark (black screen)
+  if (isImageTooDark(data)) {
+    return { isVictory: false, confidence: 0.99 };
+  }
+  
+  // Create skin tone map
+  const skinMap = createSkinMap(data, width, height);
+  
+  // Detect edges in skin regions
+  const edges = detectEdges(skinMap, width, height);
+  
+  // Analyze shape characteristics
+  const { 
+    hasVShape,
+    hasFingerGap,
+    skinRatio,
+    shapeConfidence 
+  } = analyzeShape(skinMap, edges, width, height);
+  
+  // Calculate final confidence based on multiple factors
+  const confidence = calculateConfidence(
+    hasVShape,
+    hasFingerGap,
+    skinRatio,
+    shapeConfidence
+  );
+  
+  return {
+    isVictory: confidence > sensitivitySettings.minConfidence,
+    confidence
+  };
+};
+
+// More accurate skin detection
+const createSkinMap = (data: Uint8ClampedArray, width: number, height: number): boolean[][] => {
+  const skinMap: boolean[][] = Array(height).fill(false).map(() => Array(width).fill(false));
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      
+      skinMap[y][x] = isSkinTone(r, g, b);
+    }
+  }
+  
+  return skinMap;
+};
+
+// Improved skin tone detection
+const isSkinTone = (r: number, g: number, b: number): boolean => {
+  if (r < 60 || g < 40 || b < 20) return false;
+  if (r > 250 && g > 250 && b > 250) return false;
+
+  const rgb_max = Math.max(r, Math.max(g, b));
+  const rgb_min = Math.min(r, Math.min(g, b));
+  
+  // Color intensity check
+  if ((rgb_max - rgb_min) < 20) return false;
+  
+  // Normalized RGB check
+  const sum = r + g + b;
+  if (sum === 0) return false;
+  
+  const rn = r / sum;
+  const gn = g / sum;
+  
+  return (
+    rn > 0.35 && 
+    rn < 0.465 && 
+    gn > 0.27 && 
+    gn < 0.37
+  );
+};
+
+// Advanced edge detection
+const detectEdges = (skinMap: boolean[][], width: number, height: number): boolean[][] => {
+  const edges: boolean[][] = Array(height).fill(false).map(() => Array(width).fill(false));
+  
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const neighbors = [
+        skinMap[y-1][x],
+        skinMap[y+1][x],
+        skinMap[y][x-1],
+        skinMap[y][x+1]
+      ];
+      
+      const changes = neighbors.filter(n => n !== skinMap[y][x]).length;
+      edges[y][x] = changes >= 2;
+    }
+  }
+  
+  return edges;
+};
+
+// Improved shape analysis
+const analyzeShape = (
+  skinMap: boolean[][],
+  edges: boolean[][],
+  width: number,
+  height: number
+): {
+  hasVShape: boolean;
+  hasFingerGap: boolean;
+  skinRatio: number;
+  shapeConfidence: number;
+} => {
+  let skinPixels = 0;
+  let edgePixels = 0;
+  let gapFound = false;
+  let vShapeScore = 0;
+  
+  // Calculate ratios and look for patterns
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (skinMap[y][x]) skinPixels++;
+      if (edges[y][x]) edgePixels++;
+      
+      // Look for finger gap pattern
+      if (y > height/2 && !skinMap[y][x] && (
+        (x > 0 && skinMap[y][x-1]) || 
+        (x < width-1 && skinMap[y][x+1])
+      )) {
+        gapFound = true;
+      }
+      
+      // Check for V shape pattern
+      if (y > height/2 && edges[y][x]) {
+        const leftDiagonal = checkDiagonal(edges, x, y, -1, -1, 5);
+        const rightDiagonal = checkDiagonal(edges, x, y, 1, -1, 5);
+        if (leftDiagonal && rightDiagonal) {
+          vShapeScore++;
+        }
+      }
+    }
+  }
+  
+  const totalPixels = width * height;
+  const skinRatio = skinPixels / totalPixels;
+  const edgeRatio = edgePixels / totalPixels;
+  
+  const hasVShape = vShapeScore > (height / 20);
+  const shapeConfidence = calculateShapeConfidence(
+    skinRatio,
+    edgeRatio,
+    vShapeScore,
+    height
+  );
+  
+  return {
+    hasVShape,
+    hasFingerGap: gapFound,
+    skinRatio,
+    shapeConfidence
+  };
+};
+
+// Helper function to check diagonal lines
+const checkDiagonal = (
+  edges: boolean[][],
+  startX: number,
+  startY: number,
+  dx: number,
+  dy: number,
+  length: number
+): boolean => {
+  let count = 0;
+  let x = startX;
+  let y = startY;
+  
+  for (let i = 0; i < length; i++) {
+    if (
+      y < 0 || y >= edges.length ||
+      x < 0 || x >= edges[0].length
+    ) break;
+    
+    if (edges[y][x]) count++;
+    x += dx;
+    y += dy;
+  }
+  
+  return count >= (length / 2);
+};
+
+// Calculate final confidence score
+const calculateConfidence = (
+  hasVShape: boolean,
+  hasFingerGap: boolean,
+  skinRatio: number,
+  shapeConfidence: number
+): number => {
+  if (!hasVShape || !hasFingerGap) return 0;
+  
+  const ratioScore = skinRatio >= sensitivitySettings.minSkinRatio && 
+                    skinRatio <= sensitivitySettings.maxSkinRatio
+    ? 1
+    : 0;
+  
+  return Math.min(
+    sensitivitySettings.maxConfidence,
+    (shapeConfidence * 0.5 + ratioScore * 0.5)
+  );
+};
+
+// Calculate shape confidence
+const calculateShapeConfidence = (
+  skinRatio: number,
+  edgeRatio: number,
+  vShapeScore: number,
+  height: number
+): number => {
+  const idealSkinRatio = 0.2;
+  const idealEdgeRatio = 0.05;
+  const idealVShapeScore = height / 15;
+  
+  const skinRatioScore = 1 - Math.abs(skinRatio - idealSkinRatio) / idealSkinRatio;
+  const edgeRatioScore = 1 - Math.abs(edgeRatio - idealEdgeRatio) / idealEdgeRatio;
+  const vShapeScoreNorm = Math.min(vShapeScore / idealVShapeScore, 1);
+  
+  return (skinRatioScore * 0.3 + edgeRatioScore * 0.3 + vShapeScoreNorm * 0.4);
+};
+
+// More accurate dark image detection
+const isImageTooDark = (data: Uint8ClampedArray): boolean => {
+  let darkPixels = 0;
+  const totalPixels = data.length / 4;
+  const sampleStep = 4; // Sample every 4th pixel for performance
+  
+  for (let i = 0; i < data.length; i += 16) {
+    const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    if (brightness < 30) darkPixels++;
+  }
+  
+  return (darkPixels / (totalPixels / sampleStep)) > 0.9;
 };
 
 // Function to capture image data for processing
@@ -589,21 +512,15 @@ export const exportAlertsToExcel = (alerts: GestureAlert[]): void => {
 // Function to reset the detection cooldown (useful for testing)
 export const resetDetectionCooldown = (): void => {
   lastDetectionTime = 0;
-  consecutiveVictoryDetections = 0;
 };
 
 // New function to simulate ML model training with progress feedback
 export const simulateModelTraining = async (callback?: (progress: number) => void): Promise<boolean> => {
   try {
     // Reset all detection counters
-    consecutiveVictoryDetections = 0;
-
-    // Real model initialization  
-    if (!handPoseDetector) {
-      handPoseDetector = await loadLocalHandDetector();
-    }
+    frameHistory.length = 0;
     
-    // Report progress through callback
+    // Simulate model training progress
     if (callback) {
       for (let step = 0; step <= 10; step++) {
         await new Promise(resolve => setTimeout(resolve, 80));
@@ -624,48 +541,48 @@ export const simulateModelTraining = async (callback?: (progress: number) => voi
 // Force immediate detection (bypass cooldown) - useful after training
 export const forceImmediateDetection = (): void => {
   lastDetectionTime = 0;
-  consecutiveVictoryDetections = 0;
   console.log("ML model ready for immediate detection");
 };
 
-// New function to customize detection sensitivity
+// Update sensitivity settings with new configuration
 export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void => {
   switch (level) {
     case 'low':
-      // Lower sensitivity, higher threshold for detection
       sensitivitySettings = {
-        skin_threshold: 0.4,
-        v_confidence_threshold: 0.85,
-        min_skin_ratio: 0.18,
-        max_skin_ratio: 0.4,
-        consecutive_frames: 3  // Require more consecutive frames
+        skinThreshold: 0.4,
+        edgeThreshold: 0.35,
+        minConfidence: 0.85,
+        maxConfidence: 0.95,
+        minSkinRatio: 0.12,
+        maxSkinRatio: 0.35,
+        frameThreshold: 3
       };
-      console.log("Setting detection sensitivity to LOW");
       break;
     case 'medium':
-      // Default sensitivity
       sensitivitySettings = {
-        skin_threshold: 0.35,
-        v_confidence_threshold: 0.7,
-        min_skin_ratio: 0.15,
-        max_skin_ratio: 0.4,
-        consecutive_frames: 2
+        skinThreshold: 0.35,
+        edgeThreshold: 0.3,
+        minConfidence: 0.75,
+        maxConfidence: 0.95,
+        minSkinRatio: 0.1,
+        maxSkinRatio: 0.4,
+        frameThreshold: 2
       };
-      console.log("Setting detection sensitivity to MEDIUM");
       break;
     case 'high':
-      // Higher sensitivity, catch more potential matches
       sensitivitySettings = {
-        skin_threshold: 0.3,
-        v_confidence_threshold: 0.55,
-        min_skin_ratio: 0.12,
-        max_skin_ratio: 0.45,
-        consecutive_frames: 1  // Require fewer consecutive frames
+        skinThreshold: 0.3,
+        edgeThreshold: 0.25,
+        minConfidence: 0.65,
+        maxConfidence: 0.95,
+        minSkinRatio: 0.08,
+        maxSkinRatio: 0.45,
+        frameThreshold: 1
       };
-      console.log("Setting detection sensitivity to HIGH");
       break;
   }
   
-  // Reset detection state when sensitivity changes
-  consecutiveVictoryDetections = 0;
+  // Reset frame history when changing sensitivity
+  frameHistory.length = 0;
+  console.log(`Detection sensitivity set to ${level}`);
 };
