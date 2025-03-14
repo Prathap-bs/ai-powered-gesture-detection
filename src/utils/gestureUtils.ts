@@ -1,3 +1,4 @@
+
 // This file contains utility functions for gesture detection
 import * as XLSX from 'xlsx';
 import { env } from '@huggingface/transformers';
@@ -28,6 +29,19 @@ const DETECTION_COOLDOWN_MS = 1000; // 1 second cooldown between detections
 
 // In-memory model cache - Use TensorFlow.js for hand pose detection
 let handPoseDetector: any = null;
+
+// Tracking consecutive detection frames to reduce false positives
+let consecutiveVictoryDetections = 0;
+const REQUIRED_CONSECUTIVE_DETECTIONS = 2; // Require multiple consecutive detections
+
+// Sensitivity settings
+let sensitivitySettings = {
+  skin_threshold: 0.35, // Medium default
+  v_confidence_threshold: 0.7, // Medium default
+  min_skin_ratio: 0.15,
+  max_skin_ratio: 0.4,
+  consecutive_frames: 2
+};
 
 // Local ML model using pure JS image analysis
 // This is fallback when external models fail
@@ -70,6 +84,7 @@ const loadLocalHandDetector = async () => {
           // Check if image is too dark (black screen)
           const isDarkImage = isImageTooDark(data);
           if (isDarkImage) {
+            consecutiveVictoryDetections = 0; // Reset detection counter
             resolve({ gesture: "none", confidence: 0.99 });
             return;
           }
@@ -78,20 +93,37 @@ const loadLocalHandDetector = async () => {
           const { hasHand, hasPossibleVShape, confidence } = analyzeForHandAndVShape(data, canvas.width, canvas.height);
           
           if (hasHand && hasPossibleVShape) {
-            resolve({ 
-              gesture: "victory", 
-              confidence: Math.min(0.85 + (confidence * 0.15), 0.99) 
-            });
-          } else if (hasHand) {
-            resolve({ 
-              gesture: "none", 
-              confidence: 0.7 
-            });
+            // Increase consecutive detection counter
+            consecutiveVictoryDetections++;
+            
+            // Only consider it a valid detection if we have enough consecutive frames
+            if (consecutiveVictoryDetections >= sensitivitySettings.consecutive_frames) {
+              resolve({ 
+                gesture: "victory", 
+                confidence: Math.min(0.7 + (confidence * 0.3), 0.99) 
+              });
+            } else {
+              // Not enough consecutive detections yet
+              resolve({ 
+                gesture: "none", 
+                confidence: 0.5 + (confidence * 0.2)
+              });
+            }
           } else {
-            resolve({ 
-              gesture: "none", 
-              confidence: 0.99 
-            });
+            // Reset consecutive detection counter
+            consecutiveVictoryDetections = 0;
+            
+            if (hasHand) {
+              resolve({ 
+                gesture: "none", 
+                confidence: 0.7 
+              });
+            } else {
+              resolve({ 
+                gesture: "none", 
+                confidence: 0.99 
+              });
+            }
           }
         };
         
@@ -234,13 +266,13 @@ const detectHandInGrid = (grid: number[][]): { hasHand: boolean; handConfidence:
   // Count skin cells and look for connected regions
   for (let y = 0; y < gridSize; y++) {
     for (let x = 0; x < gridSize; x++) {
-      if (grid[y][x] > 0.3) { // Cell has significant skin tone
+      if (grid[y][x] > sensitivitySettings.skin_threshold) { // Cell has significant skin tone
         skinCells++;
         
         // Check for connected regions (simple connectivity check)
         let hasNeighbor = false;
-        if (x > 0 && grid[y][x-1] > 0.3) hasNeighbor = true;
-        if (y > 0 && grid[y-1][x] > 0.3) hasNeighbor = true;
+        if (x > 0 && grid[y][x-1] > sensitivitySettings.skin_threshold) hasNeighbor = true;
+        if (y > 0 && grid[y-1][x] > sensitivitySettings.skin_threshold) hasNeighbor = true;
         
         if (!hasNeighbor) {
           connectedRegions++;
@@ -253,7 +285,9 @@ const detectHandInGrid = (grid: number[][]): { hasHand: boolean; handConfidence:
   const skinRatio = skinCells / totalCells;
   
   // A hand typically occupies 10-40% of the frame
-  const hasHand = skinRatio > 0.1 && skinRatio < 0.6 && connectedRegions < 8;
+  const hasHand = skinRatio > sensitivitySettings.min_skin_ratio && 
+                  skinRatio < sensitivitySettings.max_skin_ratio && 
+                  connectedRegions < 8;
   
   // Calculate confidence based on ratios
   let handConfidence = 0;
@@ -289,23 +323,48 @@ const detectVShapeInGrid = (grid: number[][]): { hasVShape: boolean; confidence:
   // Look for V-like patterns in the edge map
   let vShapeScore = 0;
   
-  // Simplified V pattern detection using edge symmetry and divergence
+  // Improved V pattern detection using edge symmetry and divergence
   for (let y = Math.floor(gridSize/2); y < gridSize-2; y++) {
     for (let x = 2; x < gridSize-3; x++) {
       // Look for diverging edges in a rough V pattern
       const leftArm = checkLineSegment(edgeMap, x, y, -1, -1, Math.min(5, x));
       const rightArm = checkLineSegment(edgeMap, x, y, 1, -1, Math.min(5, gridSize-x-1));
       
-      if (leftArm > 2 && rightArm > 2) {
+      // Check for gap between fingers (important for V sign)
+      const centerGap = checkGapBetweenFingers(grid, x, y);
+      
+      if (leftArm > 2 && rightArm > 2 && centerGap) {
         vShapeScore += (leftArm + rightArm) / 10;
       }
     }
   }
   
-  const hasVShape = vShapeScore > 0.8;
+  const hasVShape = vShapeScore > sensitivitySettings.v_confidence_threshold;
   const confidence = Math.min(0.5 + (vShapeScore / 4), 0.95);
   
   return { hasVShape, confidence };
+};
+
+// Check for a gap between fingers (important for V sign)
+const checkGapBetweenFingers = (grid: number[][], centerX: number, bottomY: number): boolean => {
+  // Check a vertical line going up from the bottom point
+  let gapFound = false;
+  let skinFound = 0;
+  
+  for (let y = bottomY; y >= Math.max(0, bottomY - 6); y--) {
+    // Skip if we're out of bounds
+    if (centerX < 0 || centerX >= grid[0].length || y < 0 || y >= grid.length) continue;
+    
+    // If we find minimal skin in the center, that's good for a V sign
+    if (grid[y][centerX] < 0.2) {
+      gapFound = true;
+    } else if (grid[y][centerX] > 0.3) {
+      skinFound++;
+    }
+  }
+  
+  // For a V sign, we want a gap in the center but some skin to the sides
+  return gapFound && skinFound < 3;
 };
 
 // Check for line segments in the edge map (for V detection)
@@ -369,7 +428,7 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
     const result = await handPoseDetector.detect(imageData);
     
     // Process the detection result
-    if (result.gesture === "victory" && result.confidence > 0.6) {
+    if (result.gesture === "victory" && result.confidence > 0.65) {
       console.log("Victory gesture detected with confidence:", result.confidence);
       lastDetectionTime = currentTime;
       return { gesture: "victory", confidence: result.confidence };
@@ -379,8 +438,8 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
     return { gesture: "none", confidence: result.confidence > 0.5 ? result.confidence : 0.98 };
   } catch (error) {
     console.error("Error in ML gesture detection:", error);
-    // Fall back to simulated detection if real detection fails
-    return simulatedGestureDetection();
+    // Return no gesture on error
+    return { gesture: "none", confidence: 0.99 };
   }
 };
 
@@ -400,33 +459,6 @@ const captureImageForProcessing = (videoElement: HTMLVideoElement): string | nul
   } catch (error) {
     console.error("Error capturing image for processing:", error);
     return null;
-  }
-};
-
-// Simulated gesture detection as a fallback
-const simulatedGestureDetection = (): { gesture: GestureType; confidence: number } => {
-  // Higher chance of detection (1.5% chance) for better responsiveness
-  const random = Math.random();
-  
-  if (random > 0.985) {
-    // Higher confidence range (94-100%)
-    const detectionConfidence = 0.94 + (Math.random() * 0.06);
-    
-    console.log("Simulated victory gesture detected with confidence:", detectionConfidence);
-    lastDetectionTime = Date.now();
-    
-    return { 
-      gesture: "victory", 
-      confidence: detectionConfidence
-    };
-  } else {
-    // High confidence for "none" state
-    const noneConfidence = 0.98 + (Math.random() * 0.02);
-    
-    return { 
-      gesture: "none", 
-      confidence: noneConfidence
-    };
   }
 };
 
@@ -557,11 +589,15 @@ export const exportAlertsToExcel = (alerts: GestureAlert[]): void => {
 // Function to reset the detection cooldown (useful for testing)
 export const resetDetectionCooldown = (): void => {
   lastDetectionTime = 0;
+  consecutiveVictoryDetections = 0;
 };
 
 // New function to simulate ML model training with progress feedback
 export const simulateModelTraining = async (callback?: (progress: number) => void): Promise<boolean> => {
   try {
+    // Reset all detection counters
+    consecutiveVictoryDetections = 0;
+
     // Real model initialization  
     if (!handPoseDetector) {
       handPoseDetector = await loadLocalHandDetector();
@@ -588,6 +624,7 @@ export const simulateModelTraining = async (callback?: (progress: number) => voi
 // Force immediate detection (bypass cooldown) - useful after training
 export const forceImmediateDetection = (): void => {
   lastDetectionTime = 0;
+  consecutiveVictoryDetections = 0;
   console.log("ML model ready for immediate detection");
 };
 
@@ -596,15 +633,39 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
   switch (level) {
     case 'low':
       // Lower sensitivity, higher threshold for detection
+      sensitivitySettings = {
+        skin_threshold: 0.4,
+        v_confidence_threshold: 0.85,
+        min_skin_ratio: 0.18,
+        max_skin_ratio: 0.4,
+        consecutive_frames: 3  // Require more consecutive frames
+      };
       console.log("Setting detection sensitivity to LOW");
       break;
     case 'medium':
       // Default sensitivity
+      sensitivitySettings = {
+        skin_threshold: 0.35,
+        v_confidence_threshold: 0.7,
+        min_skin_ratio: 0.15,
+        max_skin_ratio: 0.4,
+        consecutive_frames: 2
+      };
       console.log("Setting detection sensitivity to MEDIUM");
       break;
     case 'high':
       // Higher sensitivity, catch more potential matches
+      sensitivitySettings = {
+        skin_threshold: 0.3,
+        v_confidence_threshold: 0.55,
+        min_skin_ratio: 0.12,
+        max_skin_ratio: 0.45,
+        consecutive_frames: 1  // Require fewer consecutive frames
+      };
       console.log("Setting detection sensitivity to HIGH");
       break;
   }
+  
+  // Reset detection state when sensitivity changes
+  consecutiveVictoryDetections = 0;
 };
