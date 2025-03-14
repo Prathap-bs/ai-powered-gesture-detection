@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw, Loader2, Settings } from "lucide-react";
@@ -46,6 +47,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const [cooldownProgress, setCooldownProgress] = useState(0);
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [trainingProgress, setTrainingProgress] = useState(0);
+  const [sensitivity, setSensitivity] = useState<'low' | 'medium' | 'high'>('medium');
   const detectionIntervalRef = useRef<number | null>(null);
   const cooldownTimerRef = useRef<number | null>(null);
   const { toast } = useToast();
@@ -89,7 +91,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      if (result.gesture === "victory" && result.confidence > 0.6) {
+      // Lower confidence threshold to 0.55 for better detection
+      if (result.gesture === "victory" && result.confidence > 0.55) {
         const imageData = captureImage(videoRef);
         setLastCapturedImage(imageData);
         
@@ -110,7 +113,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
         setCooldownActive(true);
         startCooldownTimer();
         
-        if (result.confidence > 0.8) {
+        // Lower confidence threshold for automatic downloads too
+        if (result.confidence > 0.65) {
           const success = downloadImage(imageData, result.gesture);
           
           toast({
@@ -126,7 +130,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   };
 
   const startCooldownTimer = () => {
-    const cooldownDuration = 5000; // 5 seconds cooldown
+    const cooldownDuration = 3000; // 3 seconds cooldown (shortened from 5s)
     const updateInterval = 50; // Update progress every 50ms
     let elapsed = 0;
     
@@ -167,7 +171,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
 
   useEffect(() => {
     if (detectionActive && videoRef) {
-      detectionIntervalRef.current = window.setInterval(handleDetection, 300);
+      // Increased detection frequency for better responsiveness (200ms instead of 300ms)
+      detectionIntervalRef.current = window.setInterval(handleDetection, 200);
     }
     
     return () => {
@@ -255,6 +260,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   };
 
   const changeSensitivity = (level: 'low' | 'medium' | 'high') => {
+    setSensitivity(level);
     setDetectionSensitivity(level);
     
     toast({
@@ -425,7 +431,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                   
                   <div className="flex justify-between gap-2 mb-2">
                     <Button
-                      variant="outline"
+                      variant={sensitivity === 'low' ? "default" : "outline"}
                       size="sm"
                       className="text-xs flex-1"
                       onClick={() => changeSensitivity('low')}
@@ -433,7 +439,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                       Low
                     </Button>
                     <Button
-                      variant="default"
+                      variant={sensitivity === 'medium' ? "default" : "outline"}
                       size="sm"
                       className="text-xs flex-1"
                       onClick={() => changeSensitivity('medium')}
@@ -441,7 +447,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                       Medium
                     </Button>
                     <Button
-                      variant="outline"
+                      variant={sensitivity === 'high' ? "default" : "outline"}
                       size="sm"
                       className="text-xs flex-1"
                       onClick={() => changeSensitivity('high')}
