@@ -518,8 +518,8 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
       trackingConfidence = 0.7;
     }
     
-    // Fix: Properly handle the setOptions method
-    // The method returns a Promise<void>, not void
+    // Use void to acknowledge we're ignoring the return type
+    // and handle errors with try/catch instead
     try {
       // Call setOptions and handle it properly
       hands.setOptions({
@@ -527,13 +527,10 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
         modelComplexity: 0,
         minDetectionConfidence: detectionConfidence,
         minTrackingConfidence: trackingConfidence
-      }).then(() => {
-        console.log(`Detection sensitivity updated to ${level}`);
-      }).catch(error => {
-        console.error('Error updating sensitivity:', error);
       });
+      console.log(`Detection sensitivity updated to ${level}`);
     } catch (error) {
-      console.error('Error calling setOptions:', error);
+      console.error('Error updating sensitivity:', error);
     }
   }
   
