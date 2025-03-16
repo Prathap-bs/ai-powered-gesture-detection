@@ -1,3 +1,4 @@
+
 // This file contains utility functions for gesture detection
 import * as XLSX from 'xlsx';
 import { Hands, Results, VERSION } from '@mediapipe/hands';
@@ -519,7 +520,7 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
     }
     
     try {
-      // Call setOptions directly without chaining promises
+      // Call setOptions directly without any promise handling
       hands.setOptions({
         maxNumHands: 1,
         modelComplexity: 0,
@@ -535,3 +536,4 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
   consecutiveVictoryFrames = 0;
   console.log(`Detection sensitivity set to ${level}`);
 };
+
