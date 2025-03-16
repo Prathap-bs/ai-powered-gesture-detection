@@ -518,17 +518,23 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
       trackingConfidence = 0.7;
     }
     
-    // Fix: Make sure to properly handle the Promise returned by setOptions
-    hands.setOptions({
-      maxNumHands: 1,
-      modelComplexity: 0,
-      minDetectionConfidence: detectionConfidence,
-      minTrackingConfidence: trackingConfidence
-    }).then(() => {
-      console.log(`Detection sensitivity updated to ${level}`);
-    }).catch(error => {
-      console.error('Error updating sensitivity:', error);
-    });
+    // Fix: Properly handle the setOptions method
+    // The method returns a Promise<void>, not void
+    try {
+      // Call setOptions and handle it properly
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 0,
+        minDetectionConfidence: detectionConfidence,
+        minTrackingConfidence: trackingConfidence
+      }).then(() => {
+        console.log(`Detection sensitivity updated to ${level}`);
+      }).catch(error => {
+        console.error('Error updating sensitivity:', error);
+      });
+    } catch (error) {
+      console.error('Error calling setOptions:', error);
+    }
   }
   
   consecutiveVictoryFrames = 0;
