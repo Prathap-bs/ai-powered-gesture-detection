@@ -26,9 +26,9 @@ let lastResults: Results | null = null;
 let handDetectionActive = true;
 
 // Victory sign detection parameters
-const VICTORY_ANGLE_THRESHOLD = 25; // degrees
-const VICTORY_DISTANCE_THRESHOLD = 0.08; // normalized distance
-const DETECTION_COOLDOWN_MS = 100; // 100ms cooldown for ultra-fast detection
+const VICTORY_ANGLE_THRESHOLD = 20; // degrees - reduced from 25 to be more sensitive
+const VICTORY_DISTANCE_THRESHOLD = 0.05; // normalized distance - reduced from 0.08
+const DETECTION_COOLDOWN_MS = 20; // Reduced from 100ms to make detection ultra-fast
 
 // Gesture detection state
 let lastDetectionTime = 0;
@@ -42,18 +42,23 @@ export const initializeHandTracking = async (): Promise<boolean> => {
   try {
     console.log('Initializing MediaPipe Hands...');
     
-    // Create a new Hands instance
+    // Create a new Hands instance with error handling
+    if (hands) {
+      // Already initialized
+      return true;
+    }
+    
     hands = new Hands({
       locateFile: (file) => {
         return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VERSION}/${file}`;
       }
     });
     
-    // Configure for better performance
+    // Configure for better performance and higher sensitivity
     await hands.setOptions({
       maxNumHands: 1, // Track only one hand for better performance
-      modelComplexity: 1, // 0: lite, 1: full (more accurate)
-      minDetectionConfidence: 0.6,
+      modelComplexity: 0, // Changed to 0 (lite) for faster performance
+      minDetectionConfidence: 0.5, // Reduced from 0.6 for better detection
       minTrackingConfidence: 0.5
     });
     
@@ -72,32 +77,39 @@ export const setupMediaPipeCamera = (videoElement: HTMLVideoElement): void => {
     return;
   }
   
-  // Set up the camera utility
-  camera = new Camera(videoElement, {
-    onFrame: async () => {
-      if (!hands || !handDetectionActive) return;
-      
-      try {
-        await hands.send({ image: videoElement });
-      } catch (error) {
-        console.error('Error in MediaPipe camera processing:', error);
+  // Set up the camera utility with error handling
+  try {
+    camera = new Camera(videoElement, {
+      onFrame: async () => {
+        if (!hands || !handDetectionActive) return;
+        
+        try {
+          await hands.send({ image: videoElement });
+        } catch (error) {
+          console.error('Error in MediaPipe camera processing:', error);
+          // Continue despite errors - don't stop detection
+        }
+      },
+      width: 640,
+      height: 480
+    });
+    
+    // Set up results handler
+    hands.onResults((results) => {
+      if (handDetectionActive) {
+        lastResults = results;
+        processHandResults(results);
       }
-    },
-    width: 640,
-    height: 480
-  });
-  
-  // Set up results handler
-  hands.onResults((results) => {
-    if (handDetectionActive) {
-      lastResults = results;
-      processHandResults(results);
-    }
-  });
-  
-  // Start camera
-  camera.start();
-  console.log('MediaPipe camera setup complete');
+    });
+    
+    // Start camera
+    camera.start().catch(error => {
+      console.error('Error starting camera:', error);
+    });
+    console.log('MediaPipe camera setup complete');
+  } catch (error) {
+    console.error('Error setting up MediaPipe camera:', error);
+  }
 };
 
 // Process hand tracking results
@@ -113,18 +125,20 @@ const processHandResults = (results: Results): void => {
   // Get hand landmarks from the first detected hand
   const landmarks = results.multiHandLandmarks[0];
   
-  // Check if this is a victory sign
+  // Check if this is a victory sign - simplified detection logic
   const isVictory = detectVictorySign(landmarks);
   
   if (isVictory.detected) {
-    // Update consecutive frames counter for the current sensitivity level
+    // Update consecutive frames counter
     consecutiveVictoryFrames++;
+    
+    // Make detection faster - require fewer consecutive frames
     let requiredFrames = 1; // Default for high sensitivity
     
     if (sensitivityLevel === 'low') {
-      requiredFrames = 3;
+      requiredFrames = 2; // Reduced from 3
     } else if (sensitivityLevel === 'medium') {
-      requiredFrames = 2;
+      requiredFrames = 1; // Reduced from 2
     }
     
     // If we have enough consecutive frames, register the victory gesture
@@ -150,79 +164,72 @@ const processHandResults = (results: Results): void => {
   }
 };
 
-// Detect if the hand is making a victory sign
+// Detect if the hand is making a victory sign - simplified for reliability
 const detectVictorySign = (landmarks: any[]): { detected: boolean; confidence: number } => {
-  // Key finger landmarks for a victory sign:
-  // - Thumb: 4
-  // - Index: 5 (base), 6-7 (joints), 8 (tip)
-  // - Middle: 9 (base), 10-11 (joints), 12 (tip)
-  // - Ring: 13 (base), 14-15 (joints), 16 (tip)
-  // - Pinky: 17 (base), 18-19 (joints), 20 (tip)
-  
-  // Check if index and middle fingers are extended but others are not
-  const indexTip = landmarks[8];
-  const middleTip = landmarks[12];
-  const ringTip = landmarks[16];
-  const pinkyTip = landmarks[20];
-  const wrist = landmarks[0];
-  const indexBase = landmarks[5];
-  const middleBase = landmarks[9];
-  
-  // Calculate distances to determine if fingers are extended
-  const wristToIndexTip = getDistance3D(wrist, indexTip);
-  const wristToMiddleTip = getDistance3D(wrist, middleTip);
-  const wristToRingTip = getDistance3D(wrist, ringTip);
-  const wristToPinkyTip = getDistance3D(wrist, pinkyTip);
-  const wristToIndexBase = getDistance3D(wrist, indexBase);
-  const wristToMiddleBase = getDistance3D(wrist, middleBase);
-  
-  // Determine if fingers are extended (distance from wrist to tip > distance from wrist to base)
-  const indexExtended = wristToIndexTip > wristToIndexBase * 1.5;
-  const middleExtended = wristToMiddleTip > wristToMiddleBase * 1.5;
-  const ringContracted = wristToRingTip < wristToIndexBase * 1.2;
-  const pinkyContracted = wristToPinkyTip < wristToIndexBase * 1.2;
-  
-  // Calculate angle between index and middle fingers
-  const angleIndexMiddle = calculateAngle(
-    indexBase, indexTip, middleBase, middleTip
-  );
-  
-  // Calculate distance between index and middle finger tips (should be separated)
-  const tipDistance = getDistance3D(indexTip, middleTip);
-  const normalizedTipDistance = tipDistance / wristToIndexTip; // Normalize by hand size
-  
-  // Victory sign criteria:
-  // 1. Index and middle fingers extended
-  // 2. Ring and pinky fingers contracted
-  // 3. Angle between index and middle fingers within threshold
-  // 4. Tips of index and middle fingers sufficiently separated
-  
-  const isVictorySign = 
-    indexExtended && 
-    middleExtended && 
-    (ringContracted || pinkyContracted) && // Allow some flexibility
-    angleIndexMiddle > VICTORY_ANGLE_THRESHOLD && 
-    normalizedTipDistance > VICTORY_DISTANCE_THRESHOLD;
-  
-  // Calculate confidence based on how well the criteria are met
-  let confidence = 0;
-  
-  if (isVictorySign) {
-    confidence = 0.7; // Base confidence
+  try {
+    // Key finger landmarks for a victory sign:
+    // - Index: 5 (base), 8 (tip)
+    // - Middle: 9 (base), 12 (tip)
+    // - Ring: 13 (base), 16 (tip)
+    // - Pinky: 17 (base), 20 (tip)
+    // - Wrist: 0
     
-    // Improve confidence if more criteria are strongly met
-    if (angleIndexMiddle > VICTORY_ANGLE_THRESHOLD * 1.5) confidence += 0.1;
-    if (normalizedTipDistance > VICTORY_DISTANCE_THRESHOLD * 1.5) confidence += 0.1;
-    if (ringContracted && pinkyContracted) confidence += 0.1;
+    // Simplified detection that's more reliable
+    const indexTip = landmarks[8];
+    const middleTip = landmarks[12];
+    const ringTip = landmarks[16];
+    const pinkyTip = landmarks[20];
+    const wrist = landmarks[0];
+    const indexBase = landmarks[5];
+    const middleBase = landmarks[9];
     
-    // Cap at 1.0
-    confidence = Math.min(confidence, 1.0);
+    // Check if index and middle fingers are extended
+    const indexExtended = indexTip.y < indexBase.y - 0.1;
+    const middleExtended = middleTip.y < middleBase.y - 0.1;
+    
+    // Check if ring and pinky are not extended as much
+    const ringLessExtended = ringTip.y > indexTip.y + 0.05;
+    const pinkyLessExtended = pinkyTip.y > indexTip.y + 0.05;
+    
+    // Check distance between index and middle tips (should be separated)
+    const tipDistance = Math.sqrt(
+      Math.pow(indexTip.x - middleTip.x, 2) + 
+      Math.pow(indexTip.y - middleTip.y, 2)
+    );
+    
+    // Victory sign criteria:
+    // 1. Index and middle fingers extended
+    // 2. Ring and pinky fingers not extended as much
+    // 3. Index and middle tips separated
+    
+    const isVictorySign = 
+      indexExtended && 
+      middleExtended && 
+      (ringLessExtended || pinkyLessExtended) &&
+      tipDistance > 0.05;
+    
+    // Calculate confidence
+    let confidence = 0;
+    
+    if (isVictorySign) {
+      confidence = 0.8; // Higher base confidence
+      
+      // Improve confidence if more criteria are strongly met
+      if (ringLessExtended && pinkyLessExtended) confidence += 0.1;
+      if (tipDistance > 0.1) confidence += 0.1;
+      
+      // Cap at 1.0
+      confidence = Math.min(confidence, 1.0);
+    }
+    
+    return { 
+      detected: isVictorySign, 
+      confidence: confidence 
+    };
+  } catch (error) {
+    console.error('Error in victory sign detection:', error);
+    return { detected: false, confidence: 0 };
   }
-  
-  return { 
-    detected: isVictorySign, 
-    confidence: confidence 
-  };
 };
 
 // Calculate 3D distance between two points
@@ -248,6 +255,8 @@ const calculateAngle = (
   // Normalize vectors
   const magA = Math.sqrt(vecA.x * vecA.x + vecA.y * vecA.y);
   const magB = Math.sqrt(vecB.x * vecB.x + vecB.y * vecB.y);
+  
+  if (magA === 0 || magB === 0) return 0;
   
   const normA = { x: vecA.x / magA, y: vecA.y / magA };
   const normB = { x: vecB.x / magB, y: vecB.y / magB };
@@ -286,75 +295,80 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
 export const captureImage = (videoElement: HTMLVideoElement | null): string | null => {
   if (!videoElement) return null;
   
-  const canvas = document.createElement("canvas");
-  canvas.width = videoElement.videoWidth;
-  canvas.height = videoElement.videoHeight;
-  
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  
-  ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-  
-  // Draw hand landmarks for better visualization
-  if (lastResults && lastResults.multiHandLandmarks && lastResults.multiHandLandmarks.length > 0) {
-    const landmarks = lastResults.multiHandLandmarks[0];
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = videoElement.videoWidth;
+    canvas.height = videoElement.videoHeight;
     
-    // Draw dots at landmark positions
-    landmarks.forEach(point => {
-      ctx.beginPath();
-      ctx.arc(point.x * canvas.width, point.y * canvas.height, 5, 0, 2 * Math.PI);
-      ctx.fillStyle = currentGesture === "victory" ? "rgba(255, 50, 50, 0.7)" : "rgba(0, 255, 0, 0.7)";
-      ctx.fill();
-    });
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
     
-    // Draw connecting lines for fingers
-    const fingers = [
-      [0, 1, 2, 3, 4], // thumb
-      [0, 5, 6, 7, 8], // index
-      [0, 9, 10, 11, 12], // middle
-      [0, 13, 14, 15, 16], // ring
-      [0, 17, 18, 19, 20] // pinky
-    ];
+    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
     
-    fingers.forEach(finger => {
-      ctx.beginPath();
-      finger.forEach((idx, i) => {
-        const point = landmarks[idx];
-        if (i === 0) {
-          ctx.moveTo(point.x * canvas.width, point.y * canvas.height);
-        } else {
-          ctx.lineTo(point.x * canvas.width, point.y * canvas.height);
-        }
+    // Draw hand landmarks for better visualization
+    if (lastResults && lastResults.multiHandLandmarks && lastResults.multiHandLandmarks.length > 0) {
+      const landmarks = lastResults.multiHandLandmarks[0];
+      
+      // Draw dots at landmark positions
+      landmarks.forEach(point => {
+        ctx.beginPath();
+        ctx.arc(point.x * canvas.width, point.y * canvas.height, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = currentGesture === "victory" ? "rgba(255, 50, 50, 0.7)" : "rgba(0, 255, 0, 0.7)";
+        ctx.fill();
       });
-      ctx.strokeStyle = currentGesture === "victory" ? "rgba(255, 50, 50, 0.7)" : "rgba(0, 255, 0, 0.7)";
-      ctx.lineWidth = 3;
-      ctx.stroke();
-    });
+      
+      // Draw connecting lines for fingers
+      const fingers = [
+        [0, 1, 2, 3, 4], // thumb
+        [0, 5, 6, 7, 8], // index
+        [0, 9, 10, 11, 12], // middle
+        [0, 13, 14, 15, 16], // ring
+        [0, 17, 18, 19, 20] // pinky
+      ];
+      
+      fingers.forEach(finger => {
+        ctx.beginPath();
+        finger.forEach((idx, i) => {
+          const point = landmarks[idx];
+          if (i === 0) {
+            ctx.moveTo(point.x * canvas.width, point.y * canvas.height);
+          } else {
+            ctx.lineTo(point.x * canvas.width, point.y * canvas.height);
+          }
+        });
+        ctx.strokeStyle = currentGesture === "victory" ? "rgba(255, 50, 50, 0.7)" : "rgba(0, 255, 0, 0.7)";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      });
+    }
+    
+    // Add metadata overlay
+    const timestamp = new Date().toLocaleString();
+    const location = "Primary Camera";
+    
+    // Add black semi-transparent overlay at the bottom
+    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    ctx.fillRect(0, canvas.height - 65, canvas.width, 65);
+    
+    // Add timestamp and location info
+    ctx.font = "bold 16px Arial";
+    ctx.fillStyle = "white";
+    ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 40);
+    ctx.fillText(`Location: ${location}`, 10, canvas.height - 20);
+    
+    // Add "EMERGENCY ALERT" text for victory gestures
+    if (currentGesture === "victory") {
+      ctx.font = "bold 20px Arial";
+      ctx.fillStyle = "red";
+      ctx.fillText("EMERGENCY ALERT - DETECTED V SIGN", 10, canvas.height - 65);
+    }
+    
+    // Higher quality image capture for better evidence
+    return canvas.toDataURL("image/jpeg", 0.95);
+  } catch (error) {
+    console.error('Error capturing image:', error);
+    return null;
   }
-  
-  // Add metadata overlay
-  const timestamp = new Date().toLocaleString();
-  const location = "Primary Camera";
-  
-  // Add black semi-transparent overlay at the bottom
-  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-  ctx.fillRect(0, canvas.height - 65, canvas.width, 65);
-  
-  // Add timestamp and location info
-  ctx.font = "bold 16px Arial";
-  ctx.fillStyle = "white";
-  ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 40);
-  ctx.fillText(`Location: ${location}`, 10, canvas.height - 20);
-  
-  // Add "EMERGENCY ALERT" text for victory gestures
-  if (currentGesture === "victory") {
-    ctx.font = "bold 20px Arial";
-    ctx.fillStyle = "red";
-    ctx.fillText("EMERGENCY ALERT - DETECTED V SIGN", 10, canvas.height - 65);
-  }
-  
-  // Higher quality image capture for better evidence
-  return canvas.toDataURL("image/jpeg", 0.95);
 };
 
 // Function to download image
@@ -449,6 +463,7 @@ export const exportAlertsToExcel = (alerts: GestureAlert[]): void => {
 export const resetDetectionCooldown = (): void => {
   lastDetectionTime = 0;
   consecutiveVictoryFrames = 0;
+  console.log("Detection cooldown and consecutive frames reset");
 };
 
 // Function to simulate model training (for UI feedback)

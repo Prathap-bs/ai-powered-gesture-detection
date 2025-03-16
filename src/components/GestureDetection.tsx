@@ -54,6 +54,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const detectionIntervalRef = useRef<number | null>(null);
   const cooldownTimerRef = useRef<number | null>(null);
   const { toast } = useToast();
+  const lastGestureRef = useRef<GestureType>("none");
+  const lastAlertTimeRef = useRef<number>(0);
 
   useEffect(() => {
     if (videoRef) {
@@ -94,16 +96,16 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   };
 
   const handleDetection = async () => {
-    if (!videoRef || !detectionActive || cooldownActive) return;
+    if (!videoRef || !detectionActive) return;
     
     try {
       const result = await detectGesture(videoRef);
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // Victory gesture detected with high confidence
-      if (result.gesture === "victory" && result.confidence > 0.7) {
-        // Capture an image when the gesture is detected
+      // Victory gesture detected - immediately trigger
+      if (result.gesture === "victory" && result.gesture !== lastGestureRef.current) {
+        // Capture an image when the gesture is first detected
         const imageData = captureImage(videoRef);
         setLastCapturedImage(imageData);
         
@@ -123,12 +125,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           onGestureDetected(alert);
         }
         
-        // Start cooldown to prevent multiple detections
-        setCooldownActive(true);
-        startCooldownTimer();
-        
         // Show toast for high confidence detections
-        if (result.confidence > 0.85) {
+        if (result.confidence > 0.7) {
           const success = downloadImage(imageData, result.gesture);
           
           toast({
@@ -137,6 +135,16 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
             variant: "destructive",
           });
         }
+        
+        // Start cooldown to prevent multiple detections
+        setCooldownActive(true);
+        startCooldownTimer();
+        
+        // Update last gesture
+        lastGestureRef.current = result.gesture;
+        lastAlertTimeRef.current = Date.now();
+      } else if (result.gesture !== "victory") {
+        lastGestureRef.current = result.gesture;
       }
     } catch (error) {
       console.error("Error in gesture detection:", error);
@@ -144,7 +152,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   };
 
   const startCooldownTimer = () => {
-    const cooldownDuration = 2000;
+    const cooldownDuration = 1000; // 1 second cooldown
     const updateInterval = 50;
     let elapsed = 0;
     
@@ -163,6 +171,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
         setConsecutiveFrames(0);
         clearInterval(cooldownTimerRef.current!);
         cooldownTimerRef.current = null;
+        resetDetectionCooldown();
       }
     }, updateInterval);
   };
@@ -178,6 +187,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     }
     
     resetDetectionCooldown();
+    lastGestureRef.current = "none";
     
     toast({
       title: "Detection Reset",
@@ -187,7 +197,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
 
   useEffect(() => {
     if (detectionActive && videoRef) {
-      detectionIntervalRef.current = window.setInterval(handleDetection, 100);
+      // Faster detection interval - 50ms instead of 100ms
+      detectionIntervalRef.current = window.setInterval(handleDetection, 50);
     }
     
     return () => {
@@ -205,6 +216,8 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     setConsecutiveFrames(0);
     
     if (!detectionActive) {
+      resetCooldown(); // Reset cooldown when enabling detection
+      
       toast({
         title: "Gesture Detection Enabled",
         description: "MediaPipe hand detection is now active.",
@@ -236,6 +249,22 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     setLastCapturedImage(imageData);
     
     if (imageData) {
+      // Create manual alert
+      const alert: GestureAlert = {
+        id: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        timestamp: new Date(),
+        gestureType: "manual",
+        confidence: 1.0,
+        imageData,
+        location: "Primary Camera",
+        processed: false
+      };
+      
+      // Notify parent component
+      if (onGestureDetected) {
+        onGestureDetected(alert);
+      }
+      
       const success = downloadImage(imageData, "manual");
       
       toast({
@@ -279,6 +308,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     setSensitivity(level);
     setDetectionSensitivity(level);
     setConsecutiveFrames(0);
+    resetCooldown(); // Reset when changing sensitivity
     
     toast({
       title: `Sensitivity Set to ${level.toUpperCase()}`,
@@ -393,7 +423,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     </div>
                     <Progress value={cooldownProgress} className="h-2 bg-blue-200" />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Detection paused for {((2 - (cooldownProgress / 50))).toFixed(1)}s
+                      Detection paused for {((1 - (cooldownProgress / 100))).toFixed(1)}s
                     </p>
                   </div>
                 )}

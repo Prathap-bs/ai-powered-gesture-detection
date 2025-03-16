@@ -8,7 +8,7 @@ import GestureDetection from "@/components/GestureDetection";
 import AlertHistory from "@/components/AlertHistory";
 import { GestureAlert, generateMockAlerts, exportAlertsToExcel, resetDetectionCooldown } from "@/utils/gestureUtils";
 import { Button } from "@/components/ui/button";
-import { Plus, Camera, FileSpreadsheet, RefreshCw } from "lucide-react";
+import { Plus, Camera, FileSpreadsheet, RefreshCw, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useIsMobile } from "@/hooks/use-mobile";
 
@@ -50,18 +50,16 @@ const Dashboard = () => {
   };
 
   const handleGestureDetected = (alert: GestureAlert) => {
-    // Only add the alert if it's not "none" type
-    if (alert.gestureType !== "none") {
-      setAlerts(prev => [alert, ...prev]);
-      
-      // Only show toast for victory gesture with high confidence
-      if (alert.gestureType === "victory" && alert.confidence > 0.8) {
-        toast({
-          title: "Emergency Gesture Detected!",
-          description: `A Victory sign was detected on camera with ${(alert.confidence * 100).toFixed(0)}% confidence.`,
-          variant: "destructive",
-        });
-      }
+    // Always add the alert, including "none" type
+    setAlerts(prev => [alert, ...prev]);
+    
+    // Show toast for victory gesture with high confidence
+    if (alert.gestureType === "victory" && alert.confidence > 0.7) {
+      toast({
+        title: "Emergency Gesture Detected!",
+        description: `A Victory sign was detected on camera with ${(alert.confidence * 100).toFixed(0)}% confidence.`,
+        variant: "destructive",
+      });
     }
   };
 
@@ -172,6 +170,17 @@ const Dashboard = () => {
           </div>
         </div>
       
+        {/* New prominent reset button for emergency gesture detection */}
+        <Button 
+          variant="destructive" 
+          className="mb-4 flex items-center justify-center gap-2 w-full"
+          onClick={handleResetDetection}
+        >
+          <AlertTriangle className="h-5 w-5" />
+          <span className="font-bold">RESET GESTURE DETECTION</span>
+          <AlertTriangle className="h-5 w-5" />
+        </Button>
+
         <div className={`grid ${isMobile ? 'grid-cols-1' : 'grid-cols-3'} gap-4 mb-4`}>
           <div className={`${isMobile ? '' : 'col-span-2'}`}>
             <WebcamFeed 
