@@ -518,12 +518,14 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
       trackingConfidence = 0.7;
     }
     
-    // Update MediaPipe settings
+    // Fix: Make sure to properly handle the Promise returned by setOptions
     hands.setOptions({
       maxNumHands: 1,
       modelComplexity: 0,
       minDetectionConfidence: detectionConfidence,
       minTrackingConfidence: trackingConfidence
+    }).then(() => {
+      console.log(`Detection sensitivity updated to ${level}`);
     }).catch(error => {
       console.error('Error updating sensitivity:', error);
     });
