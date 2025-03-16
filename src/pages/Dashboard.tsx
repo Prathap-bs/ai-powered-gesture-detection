@@ -50,14 +50,14 @@ const Dashboard = () => {
   };
 
   const handleGestureDetected = (alert: GestureAlert) => {
-    // Always add the alert, including "none" type
+    // Add the alert to history
     setAlerts(prev => [alert, ...prev]);
     
     // Show toast for victory gesture with high confidence
     if (alert.gestureType === "victory" && alert.confidence > 0.7) {
       toast({
-        title: "Emergency Gesture Detected!",
-        description: `A Victory sign was detected on camera with ${(alert.confidence * 100).toFixed(0)}% confidence.`,
+        title: "🚨 Emergency Alert",
+        description: `Victory sign detected with ${(alert.confidence * 100).toFixed(0)}% confidence. Evidence captured.`,
         variant: "destructive",
       });
     }
@@ -117,7 +117,7 @@ const Dashboard = () => {
     
     toast({
       title: "Detection Reset",
-      description: "Gesture detection system has been reset.",
+      description: "V sign detection system has been reset and is ready.",
     });
   };
 
@@ -138,7 +138,7 @@ const Dashboard = () => {
       
       <main className="flex-1 container py-4 md:py-6 flex flex-col">
         <div className="flex justify-between items-center mb-4">
-          <h1 className="text-2xl font-bold">Surveillance Dashboard</h1>
+          <h1 className="text-2xl font-bold">Emergency Gesture Dashboard</h1>
           <div className="flex space-x-2">
             <Button 
               variant="outline" 
@@ -170,15 +170,15 @@ const Dashboard = () => {
           </div>
         </div>
       
-        {/* New prominent reset button for emergency gesture detection */}
+        {/* Emergency reset button - visually prominent */}
         <Button 
           variant="destructive" 
-          className="mb-4 flex items-center justify-center gap-2 w-full"
+          className="mb-4 flex items-center justify-center gap-2 w-full py-6 group hover:bg-red-600 transition-all duration-200"
           onClick={handleResetDetection}
         >
-          <AlertTriangle className="h-5 w-5" />
-          <span className="font-bold">RESET GESTURE DETECTION</span>
-          <AlertTriangle className="h-5 w-5" />
+          <AlertTriangle className="h-6 w-6 group-hover:animate-pulse" />
+          <span className="font-bold text-lg">RESET V SIGN DETECTION</span>
+          <AlertTriangle className="h-6 w-6 group-hover:animate-pulse" />
         </Button>
 
         <div className={`grid ${isMobile ? 'grid-cols-1' : 'grid-cols-3'} gap-4 mb-4`}>

@@ -23,8 +23,6 @@ import {
   resetDetectionCooldown,
   simulateModelTraining,
   setDetectionSensitivity,
-  initializeHandTracking,
-  setupMediaPipeCamera,
   GestureType, 
   GestureAlert,
   getGestureColor,
@@ -56,94 +54,136 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const { toast } = useToast();
   const lastGestureRef = useRef<GestureType>("none");
   const lastAlertTimeRef = useRef<number>(0);
+  const captureIntervalRef = useRef<number | null>(null);
 
+  // Initialize detection on component mount
   useEffect(() => {
     if (videoRef) {
       trainModel();
     }
+    
+    return () => {
+      // Cleanup detection and cooldown timers on unmount
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+      }
+      if (cooldownTimerRef.current) {
+        clearInterval(cooldownTimerRef.current);
+      }
+      if (captureIntervalRef.current) {
+        clearInterval(captureIntervalRef.current);
+      }
+    };
   }, [videoRef]);
 
+  // Train the model and set up detection
   const trainModel = async () => {
     setIsModelLoading(true);
     setTrainingProgress(0);
     setConsecutiveFrames(0);
     
     try {
-      // Initialize MediaPipe when training the model
-      await simulateModelTraining((progress) => {
+      // Simulate model training with progress updates
+      const success = await simulateModelTraining((progress) => {
         setTrainingProgress(progress);
       });
       
-      // Set up MediaPipe with the video element
-      if (videoRef) {
-        setupMediaPipeCamera(videoRef);
+      if (success) {
+        toast({
+          title: "V Sign Detection Ready",
+          description: "Hand detection model is now active and looking for emergency gestures.",
+        });
+      } else {
+        toast({
+          title: "Detection Setup Issue",
+          description: "There was a problem setting up the detector. Try again.",
+          variant: "destructive",
+        });
       }
-      
-      toast({
-        title: "Model Trained",
-        description: "MediaPipe hand detection model is ready!",
-      });
     } catch (error) {
       console.error("Error training model:", error);
       toast({
-        title: "Model Training Failed",
-        description: "Using fallback detection method",
+        title: "Model Setup Failed",
+        description: "Using basic detection instead. Performance may be limited.",
         variant: "destructive",
       });
     } finally {
       setIsModelLoading(false);
+      // Start detection regardless of setup outcome
+      startDetection();
     }
   };
 
+  // Start the detection process
+  const startDetection = () => {
+    if (detectionIntervalRef.current) {
+      clearInterval(detectionIntervalRef.current);
+    }
+    
+    // Very fast detection interval - 25ms (40fps)
+    detectionIntervalRef.current = window.setInterval(handleDetection, 25);
+    setDetectionActive(true);
+  };
+
+  // Handle each detection frame
   const handleDetection = async () => {
     if (!videoRef || !detectionActive) return;
     
     try {
+      // Get current gesture detection
       const result = await detectGesture(videoRef);
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      // Victory gesture detected - immediately trigger
-      if (result.gesture === "victory" && result.gesture !== lastGestureRef.current) {
-        // Capture an image when the gesture is first detected
-        const imageData = captureImage(videoRef);
-        setLastCapturedImage(imageData);
+      // Victory gesture detected
+      if (result.gesture === "victory" && result.confidence > 0.5) {
+        // Only trigger if it's a new gesture or sufficient time has passed
+        const currentTime = Date.now();
+        const newGesture = result.gesture !== lastGestureRef.current;
+        const timeElapsed = currentTime - lastAlertTimeRef.current > 1000;
         
-        // Create an alert
-        const alert: GestureAlert = {
-          id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          timestamp: new Date(),
-          gestureType: result.gesture,
-          confidence: result.confidence,
-          imageData,
-          location: "Primary Camera",
-          processed: false
-        };
-        
-        // Notify parent component
-        if (onGestureDetected) {
-          onGestureDetected(alert);
-        }
-        
-        // Show toast for high confidence detections
-        if (result.confidence > 0.7) {
-          const success = downloadImage(imageData, result.gesture);
+        if (newGesture || timeElapsed) {
+          // Capture image for the alert
+          const imageData = captureImage(videoRef);
+          setLastCapturedImage(imageData);
           
-          toast({
-            title: "⚠️ Emergency Gesture Detected",
-            description: `Victory sign detected with high confidence. ${success ? 'Evidence image saved to downloads.' : ''}`,
-            variant: "destructive",
-          });
+          // Create a new alert
+          const alert: GestureAlert = {
+            id: `alert-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+            timestamp: new Date(),
+            gestureType: result.gesture,
+            confidence: result.confidence,
+            imageData,
+            location: "Primary Camera",
+            processed: false
+          };
+          
+          // Notify parent component
+          if (onGestureDetected) {
+            onGestureDetected(alert);
+          }
+          
+          // Auto-save the image
+          if (imageData) {
+            const success = downloadImage(imageData, result.gesture);
+            
+            toast({
+              title: "🚨 EMERGENCY GESTURE DETECTED",
+              description: `Victory sign detected with ${Math.round(result.confidence * 100)}% confidence. ${success ? 'Evidence saved automatically.' : ''}`,
+              variant: "destructive",
+            });
+          }
+          
+          // Start cooldown to prevent spam
+          setCooldownActive(true);
+          startCooldownTimer();
+          
+          // Update last detection references
+          lastGestureRef.current = result.gesture;
+          lastAlertTimeRef.current = currentTime;
         }
-        
-        // Start cooldown to prevent multiple detections
-        setCooldownActive(true);
-        startCooldownTimer();
-        
-        // Update last gesture
-        lastGestureRef.current = result.gesture;
-        lastAlertTimeRef.current = Date.now();
       } else if (result.gesture !== "victory") {
+        // Update last gesture reference when not victory
         lastGestureRef.current = result.gesture;
       }
     } catch (error) {
@@ -151,31 +191,36 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     }
   };
 
+  // Handle the detection cooldown period
   const startCooldownTimer = () => {
-    const cooldownDuration = 1000; // 1 second cooldown
-    const updateInterval = 50;
+    const cooldownDuration = 500; // Reduced cooldown: 500ms
+    const updateInterval = 25; // Faster updates
     let elapsed = 0;
     
+    // Clear existing timer
     if (cooldownTimerRef.current) {
       clearInterval(cooldownTimerRef.current);
     }
     
+    // Start new timer
     cooldownTimerRef.current = window.setInterval(() => {
       elapsed += updateInterval;
       const progress = (elapsed / cooldownDuration) * 100;
       setCooldownProgress(progress);
       
       if (elapsed >= cooldownDuration) {
+        // End cooldown
         setCooldownActive(false);
         setCooldownProgress(0);
         setConsecutiveFrames(0);
         clearInterval(cooldownTimerRef.current!);
         cooldownTimerRef.current = null;
-        resetDetectionCooldown();
+        resetDetectionCooldown(); // Reset detection state
       }
     }, updateInterval);
   };
 
+  // Reset cooldown and detection state
   const resetCooldown = () => {
     setCooldownActive(false);
     setCooldownProgress(0);
@@ -188,53 +233,42 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     
     resetDetectionCooldown();
     lastGestureRef.current = "none";
+    lastAlertTimeRef.current = 0;
     
     toast({
       title: "Detection Reset",
-      description: "Gesture detection cooldown has been reset.",
+      description: "Gesture detection has been reset and is ready.",
     });
   };
 
-  useEffect(() => {
-    if (detectionActive && videoRef) {
-      // Faster detection interval - 50ms instead of 100ms
-      detectionIntervalRef.current = window.setInterval(handleDetection, 50);
-    }
-    
-    return () => {
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current);
-      }
-      if (cooldownTimerRef.current) {
-        clearInterval(cooldownTimerRef.current);
-      }
-    };
-  }, [detectionActive, videoRef, cooldownActive, consecutiveFrames, sensitivity]);
-
+  // Toggle detection on/off
   const toggleDetection = () => {
     setDetectionActive(!detectionActive);
     setConsecutiveFrames(0);
     
     if (!detectionActive) {
       resetCooldown(); // Reset cooldown when enabling detection
+      startDetection();
       
       toast({
         title: "Gesture Detection Enabled",
-        description: "MediaPipe hand detection is now active.",
+        description: "Hand detection is now active.",
       });
     } else {
+      // Stop detection
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current);
         detectionIntervalRef.current = null;
       }
       
       toast({
-        title: "Gesture Detection Disabled",
+        title: "Gesture Detection Paused",
         description: "Hand detection is now paused.",
       });
     }
   };
 
+  // Handle manual image capture
   const handleManualCapture = () => {
     if (!videoRef) {
       toast({
@@ -251,7 +285,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     if (imageData) {
       // Create manual alert
       const alert: GestureAlert = {
-        id: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        id: `manual-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
         timestamp: new Date(),
         gestureType: "manual",
         confidence: 1.0,
@@ -265,12 +299,13 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
         onGestureDetected(alert);
       }
       
+      // Download the image
       const success = downloadImage(imageData, "manual");
       
       toast({
         title: "Manual Capture",
         description: success 
-          ? "Image captured and saved to downloads." 
+          ? "Image captured and saved." 
           : "Image captured but download failed.",
         variant: success ? "default" : "destructive",
       });
@@ -283,6 +318,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     }
   };
 
+  // Download the last captured image
   const handleDownloadLastImage = () => {
     if (!lastCapturedImage) {
       toast({
@@ -298,12 +334,13 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     toast({
       title: success ? "Image Downloaded" : "Download Failed",
       description: success 
-        ? "The captured image has been saved to your downloads folder." 
+        ? "The captured image has been saved to your downloads." 
         : "Failed to download the image.",
       variant: success ? "default" : "destructive",
     });
   };
 
+  // Change detection sensitivity
   const changeSensitivity = (level: 'low' | 'medium' | 'high') => {
     setSensitivity(level);
     setDetectionSensitivity(level);
@@ -311,11 +348,16 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     resetCooldown(); // Reset when changing sensitivity
     
     toast({
-      title: `Sensitivity Set to ${level.toUpperCase()}`,
-      description: `Hand gesture detection sensitivity has been adjusted.`,
+      title: `Sensitivity: ${level.toUpperCase()}`,
+      description: level === 'high' 
+        ? "Maximum sensitivity - will detect gestures quickly."
+        : level === 'medium'
+        ? "Balanced sensitivity - fewer false positives."
+        : "Low sensitivity - only clear gestures detected.",
     });
   };
 
+  // Get the color for the confidence bar
   const getConfidenceColor = (confidence: number) => {
     if (confidence > 0.9) return "bg-green-500";
     if (confidence > 0.7) return "bg-amber-500";
@@ -328,7 +370,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       <CardHeader className="px-4 py-3 flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-sm font-medium flex items-center">
           <AlertTriangle className="w-4 h-4 mr-1.5" />
-          MediaPipe Victory Sign Detection
+          V Sign Emergency Detection
           
           <TooltipProvider>
             <Tooltip>
@@ -339,9 +381,9 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p className="text-xs">
-                  Using Google's MediaPipe Hands for accurate V sign detection.
+                  Hold up index and middle finger in a V shape to trigger emergency alert.
                   <br />
-                  When detected, an emergency alert is triggered and evidence is captured.
+                  Evidence is automatically captured and saved.
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -354,13 +396,23 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
         >
           <div className="flex items-center gap-1">
             <Button 
+              onClick={resetCooldown}
+              variant="outline" 
+              size="sm"
+              className="h-7 text-xs"
+              disabled={isModelLoading}
+            >
+              <RefreshCw className="h-3 w-3 mr-1" />
+              Reset
+            </Button>
+            <Button 
               onClick={toggleDetection}
               variant={detectionActive ? "destructive" : "outline"} 
               size="sm"
               className="h-7 text-xs"
               disabled={isModelLoading}
             >
-              {detectionActive ? "Pause Detection" : "Start Detection"}
+              {detectionActive ? "Pause" : "Start"}
             </Button>
             <CollapsibleTrigger asChild>
               <Button variant="ghost" size="icon" className="h-7 w-7">
@@ -379,19 +431,19 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                 {isModelLoading ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium">Loading MediaPipe Model:</span>
+                      <span className="text-xs font-medium">Loading Detection Model:</span>
                       <span className="text-xs font-medium">{trainingProgress.toFixed(0)}%</span>
                     </div>
                     <Progress value={trainingProgress} className="h-2 bg-blue-200" />
                     <p className="text-xs text-muted-foreground mt-1 flex items-center">
                       <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      Loading Google MediaPipe hand tracking model...
+                      Initializing gesture detection system...
                     </p>
                   </div>
                 ) : (
                   <div>
                     <div className="flex justify-between mb-1">
-                      <span className="text-xs font-medium">Current Status:</span>
+                      <span className="text-xs font-medium">Detected Gesture:</span>
                       <span 
                         className={`text-xs font-semibold ${getGestureColor(currentGesture)}`}
                       >
@@ -404,6 +456,9 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     />
                     <div className="flex justify-between text-xs text-muted-foreground mt-1">
                       <span>Confidence: {(confidence * 100).toFixed(1)}%</span>
+                      {currentGesture === "victory" && (
+                        <span className="text-red-500 font-medium animate-pulse">ACTIVE!</span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -411,7 +466,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                 {cooldownActive && (
                   <div>
                     <div className="flex justify-between items-center mb-1">
-                      <span className="text-xs font-medium">Cooldown:</span>
+                      <span className="text-xs font-medium">Alert Cooldown:</span>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -423,7 +478,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     </div>
                     <Progress value={cooldownProgress} className="h-2 bg-blue-200" />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Detection paused for {((1 - (cooldownProgress / 100))).toFixed(1)}s
+                      Next alert available in {((1 - (cooldownProgress / 100)) * 0.5).toFixed(1)}s
                     </p>
                   </div>
                 )}
@@ -470,9 +525,9 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                       alt="Victory sign gesture" 
                       className="h-20 mx-auto mb-2"
                     />
-                    <p className="font-semibold">Detecting "V" Sign</p>
+                    <p className="font-semibold">Hold up two fingers in a "V" shape</p>
                     <p className="text-xs text-muted-foreground">
-                      Hold up index and middle finger to trigger emergency alert
+                      Index and middle finger extended to trigger emergency
                     </p>
                   </div>
                   
@@ -507,7 +562,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     className={`
                       border rounded-md p-2
                       ${currentGesture === "victory" ? 
-                        'border-primary/50 bg-primary/5' : 
+                        'border-red-500 bg-red-100 dark:bg-red-950/30' : 
                         'border-border bg-background hover:bg-secondary/40'
                       }
                       transition-all
@@ -517,7 +572,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                       <span>Victory Sign Emergency</span>
                       <span 
                         className={`h-2 w-2 rounded-full ${
-                          currentGesture === "victory" ? 'bg-primary animate-pulse' : 'bg-gray-300'
+                          currentGesture === "victory" ? 'bg-red-500 animate-pulse' : 'bg-gray-300'
                         }`}
                       ></span>
                     </div>
