@@ -1,6 +1,8 @@
+
 // This file contains utility functions for gesture detection
 import * as XLSX from 'xlsx';
-import { env } from '@huggingface/transformers';
+import { Hands, Results, VERSION } from '@mediapipe/hands';
+import { Camera } from '@mediapipe/camera_utils';
 
 export type GestureType = 
   | "victory" // V sign with index and middle finger
@@ -17,95 +19,248 @@ export type GestureAlert = {
   processed: boolean;
 };
 
-// Configure transformers.js to use CDN and browser cache
-env.allowLocalModels = false;
-env.useBrowserCache = true;
-env.backends.onnx.wasm.numThreads = 4;
+// MediaPipe Hands configuration
+let hands: Hands | null = null;
+let camera: Camera | null = null;
+let lastResults: Results | null = null;
+let handDetectionActive = true;
 
-// Significantly reduce detection cooldown for super-fast response
+// Victory sign detection parameters
+const VICTORY_ANGLE_THRESHOLD = 25; // degrees
+const VICTORY_DISTANCE_THRESHOLD = 0.08; // normalized distance
+const DETECTION_COOLDOWN_MS = 100; // 100ms cooldown for ultra-fast detection
+
+// Gesture detection state
 let lastDetectionTime = 0;
-const DETECTION_COOLDOWN_MS = 100; // Reduce to 100ms for ultra-fast detection
+let detectionConfidence = 0;
+let currentGesture: GestureType = "none";
+let consecutiveVictoryFrames = 0;
+let sensitivityLevel: 'low' | 'medium' | 'high' = 'high';
 
-// Track frame history for better accuracy, but with shorter history for faster response
-const frameHistory: {isVictory: boolean, confidence: number}[] = [];
-const FRAME_HISTORY_SIZE = 3; // Reduced for faster detection
-const REQUIRED_POSITIVE_FRAMES = 2; // Reduced for faster detection
-
-// Ultra-sensitive settings for improved detection
-let sensitivitySettings = {
-  skinThreshold: 0.3,
-  edgeThreshold: 0.25,
-  minConfidence: 0.55, // Lower threshold for detecting V signs
-  maxConfidence: 0.98,
-  minSkinRatio: 0.05, // Allow smaller hand detection
-  maxSkinRatio: 0.4,  // Allow larger hand detection
-  frameThreshold: 1,
-  vShapeMinScore: 3
+// Initialize MediaPipe Hands
+export const initializeHandTracking = async (): Promise<boolean> => {
+  try {
+    console.log('Initializing MediaPipe Hands...');
+    
+    // Create a new Hands instance
+    hands = new Hands({
+      locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VERSION}/${file}`;
+      }
+    });
+    
+    // Configure for better performance
+    await hands.setOptions({
+      maxNumHands: 1, // Track only one hand for better performance
+      modelComplexity: 1, // 0: lite, 1: full (more accurate)
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.5
+    });
+    
+    console.log(`MediaPipe Hands (version ${VERSION}) initialized successfully`);
+    return true;
+  } catch (error) {
+    console.error('Error initializing MediaPipe Hands:', error);
+    return false;
+  }
 };
 
-// Improved V sign templates with better coverage of different hand positions
-const vSignTemplates = [
-  // Template 1: Classic V sign (peace sign)
-  {
-    name: "classic_v",
-    regions: [
-      { x: 0.4, y: 0.3, width: 0.1, height: 0.4, isSkin: true }, // Left finger
-      { x: 0.5, y: 0.4, width: 0.1, height: 0.1, isSkin: false }, // Gap between fingers
-      { x: 0.6, y: 0.3, width: 0.1, height: 0.4, isSkin: true }, // Right finger
-      { x: 0.45, y: 0.7, width: 0.2, height: 0.2, isSkin: true }, // Base of hand
-    ],
-    weight: 1.0
-  },
-  // Template 2: Wider V sign
-  {
-    name: "wide_v",
-    regions: [
-      { x: 0.3, y: 0.3, width: 0.1, height: 0.4, isSkin: true }, // Left finger
-      { x: 0.4, y: 0.35, width: 0.2, height: 0.2, isSkin: false }, // Wider gap
-      { x: 0.6, y: 0.3, width: 0.1, height: 0.4, isSkin: true }, // Right finger
-      { x: 0.4, y: 0.7, width: 0.2, height: 0.2, isSkin: true }, // Base of hand
-    ],
-    weight: 0.8
-  },
-  // Template 3: Tilted V sign
-  {
-    name: "tilted_v",
-    regions: [
-      { x: 0.35, y: 0.25, width: 0.1, height: 0.4, isSkin: true }, // Left finger (tilted)
-      { x: 0.45, y: 0.4, width: 0.1, height: 0.1, isSkin: false }, // Gap
-      { x: 0.55, y: 0.35, width: 0.1, height: 0.4, isSkin: true }, // Right finger (tilted)
-      { x: 0.45, y: 0.7, width: 0.2, height: 0.2, isSkin: true }, // Base of hand
-    ],
-    weight: 0.7
-  },
-  // Template 4: Close V sign
-  {
-    name: "close_v",
-    regions: [
-      { x: 0.45, y: 0.3, width: 0.08, height: 0.4, isSkin: true }, // Left finger (close)
-      { x: 0.53, y: 0.35, width: 0.04, height: 0.1, isSkin: false }, // Narrow gap
-      { x: 0.57, y: 0.3, width: 0.08, height: 0.4, isSkin: true }, // Right finger (close)
-      { x: 0.5, y: 0.7, width: 0.15, height: 0.2, isSkin: true }, // Base of hand
-    ],
-    weight: 0.6
-  },
-  // Template 5: Raised hand with V sign
-  {
-    name: "raised_v",
-    regions: [
-      { x: 0.4, y: 0.2, width: 0.1, height: 0.4, isSkin: true }, // Left finger (higher)
-      { x: 0.5, y: 0.25, width: 0.1, height: 0.1, isSkin: false }, // Gap (higher)
-      { x: 0.6, y: 0.2, width: 0.1, height: 0.4, isSkin: true }, // Right finger (higher)
-      { x: 0.45, y: 0.6, width: 0.2, height: 0.2, isSkin: true }, // Base of hand
-    ],
-    weight: 0.7
+// Set up camera with MediaPipe Hands
+export const setupMediaPipeCamera = (videoElement: HTMLVideoElement): void => {
+  if (!hands) {
+    console.error('Hands not initialized');
+    return;
   }
-];
+  
+  // Set up the camera utility
+  camera = new Camera(videoElement, {
+    onFrame: async () => {
+      if (!hands || !handDetectionActive) return;
+      
+      try {
+        await hands.send({ image: videoElement });
+      } catch (error) {
+        console.error('Error in MediaPipe camera processing:', error);
+      }
+    },
+    width: 640,
+    height: 480
+  });
+  
+  // Set up results handler
+  hands.onResults((results) => {
+    if (handDetectionActive) {
+      lastResults = results;
+      processHandResults(results);
+    }
+  });
+  
+  // Start camera
+  camera.start();
+  console.log('MediaPipe camera setup complete');
+};
 
-// Enhanced model initialization flag
-let modelInitialized = false;
+// Process hand tracking results
+const processHandResults = (results: Results): void => {
+  // If no hands detected, reset detection
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    currentGesture = "none";
+    detectionConfidence = 0;
+    consecutiveVictoryFrames = 0;
+    return;
+  }
+  
+  // Get hand landmarks from the first detected hand
+  const landmarks = results.multiHandLandmarks[0];
+  
+  // Check if this is a victory sign
+  const isVictory = detectVictorySign(landmarks);
+  
+  if (isVictory.detected) {
+    // Update consecutive frames counter for the current sensitivity level
+    consecutiveVictoryFrames++;
+    let requiredFrames = 1; // Default for high sensitivity
+    
+    if (sensitivityLevel === 'low') {
+      requiredFrames = 3;
+    } else if (sensitivityLevel === 'medium') {
+      requiredFrames = 2;
+    }
+    
+    // If we have enough consecutive frames, register the victory gesture
+    if (consecutiveVictoryFrames >= requiredFrames) {
+      currentGesture = "victory";
+      detectionConfidence = isVictory.confidence;
+      
+      // Check cooldown for triggering an alert
+      const currentTime = Date.now();
+      if (currentTime - lastDetectionTime > DETECTION_COOLDOWN_MS) {
+        lastDetectionTime = currentTime;
+      }
+    } else {
+      // Still detecting, but not enough consecutive frames
+      currentGesture = "none";
+      detectionConfidence = isVictory.confidence * 0.5;
+    }
+  } else {
+    // Reset if not a victory sign
+    currentGesture = "none";
+    detectionConfidence = 0;
+    consecutiveVictoryFrames = 0;
+  }
+};
 
-// Enhanced detection function with super-fast multi-frame validation
+// Detect if the hand is making a victory sign
+const detectVictorySign = (landmarks: any[]): { detected: boolean; confidence: number } => {
+  // Key finger landmarks for a victory sign:
+  // - Thumb: 4
+  // - Index: 5 (base), 6-7 (joints), 8 (tip)
+  // - Middle: 9 (base), 10-11 (joints), 12 (tip)
+  // - Ring: 13 (base), 14-15 (joints), 16 (tip)
+  // - Pinky: 17 (base), 18-19 (joints), 20 (tip)
+  
+  // Check if index and middle fingers are extended but others are not
+  const indexTip = landmarks[8];
+  const middleTip = landmarks[12];
+  const ringTip = landmarks[16];
+  const pinkyTip = landmarks[20];
+  const wrist = landmarks[0];
+  const indexBase = landmarks[5];
+  const middleBase = landmarks[9];
+  
+  // Calculate distances to determine if fingers are extended
+  const wristToIndexTip = getDistance3D(wrist, indexTip);
+  const wristToMiddleTip = getDistance3D(wrist, middleTip);
+  const wristToRingTip = getDistance3D(wrist, ringTip);
+  const wristToPinkyTip = getDistance3D(wrist, pinkyTip);
+  const wristToIndexBase = getDistance3D(wrist, indexBase);
+  const wristToMiddleBase = getDistance3D(wrist, middleBase);
+  
+  // Determine if fingers are extended (distance from wrist to tip > distance from wrist to base)
+  const indexExtended = wristToIndexTip > wristToIndexBase * 1.5;
+  const middleExtended = wristToMiddleTip > wristToMiddleBase * 1.5;
+  const ringContracted = wristToRingTip < wristToIndexBase * 1.2;
+  const pinkyContracted = wristToPinkyTip < wristToIndexBase * 1.2;
+  
+  // Calculate angle between index and middle fingers
+  const angleIndexMiddle = calculateAngle(
+    indexBase, indexTip, middleBase, middleTip
+  );
+  
+  // Calculate distance between index and middle finger tips (should be separated)
+  const tipDistance = getDistance3D(indexTip, middleTip);
+  const normalizedTipDistance = tipDistance / wristToIndexTip; // Normalize by hand size
+  
+  // Victory sign criteria:
+  // 1. Index and middle fingers extended
+  // 2. Ring and pinky fingers contracted
+  // 3. Angle between index and middle fingers within threshold
+  // 4. Tips of index and middle fingers sufficiently separated
+  
+  const isVictorySign = 
+    indexExtended && 
+    middleExtended && 
+    (ringContracted || pinkyContracted) && // Allow some flexibility
+    angleIndexMiddle > VICTORY_ANGLE_THRESHOLD && 
+    normalizedTipDistance > VICTORY_DISTANCE_THRESHOLD;
+  
+  // Calculate confidence based on how well the criteria are met
+  let confidence = 0;
+  
+  if (isVictorySign) {
+    confidence = 0.7; // Base confidence
+    
+    // Improve confidence if more criteria are strongly met
+    if (angleIndexMiddle > VICTORY_ANGLE_THRESHOLD * 1.5) confidence += 0.1;
+    if (normalizedTipDistance > VICTORY_DISTANCE_THRESHOLD * 1.5) confidence += 0.1;
+    if (ringContracted && pinkyContracted) confidence += 0.1;
+    
+    // Cap at 1.0
+    confidence = Math.min(confidence, 1.0);
+  }
+  
+  return { 
+    detected: isVictorySign, 
+    confidence: confidence 
+  };
+};
+
+// Calculate 3D distance between two points
+const getDistance3D = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number => {
+  return Math.sqrt(
+    Math.pow(a.x - b.x, 2) + 
+    Math.pow(a.y - b.y, 2) + 
+    Math.pow(a.z - b.z, 2)
+  );
+};
+
+// Calculate angle between two lines defined by 4 points
+const calculateAngle = (
+  a1: { x: number; y: number }, 
+  a2: { x: number; y: number },
+  b1: { x: number; y: number },
+  b2: { x: number; y: number }
+): number => {
+  // Get direction vectors
+  const vecA = { x: a2.x - a1.x, y: a2.y - a1.y };
+  const vecB = { x: b2.x - b1.x, y: b2.y - b1.y };
+  
+  // Normalize vectors
+  const magA = Math.sqrt(vecA.x * vecA.x + vecA.y * vecA.y);
+  const magB = Math.sqrt(vecB.x * vecB.x + vecB.y * vecB.y);
+  
+  const normA = { x: vecA.x / magA, y: vecA.y / magA };
+  const normB = { x: vecB.x / magB, y: vecB.y / magB };
+  
+  // Calculate dot product
+  const dotProduct = normA.x * normB.x + normA.y * normB.y;
+  
+  // Calculate angle in degrees
+  const angleRadians = Math.acos(Math.max(-1, Math.min(1, dotProduct)));
+  return angleRadians * (180 / Math.PI);
+};
+
+// Enhanced detection function that uses MediaPipe
 export const detectGesture = async (videoElement: HTMLVideoElement | null): Promise<{ 
   gesture: GestureType; 
   confidence: number; 
@@ -113,401 +268,18 @@ export const detectGesture = async (videoElement: HTMLVideoElement | null): Prom
   if (!videoElement) {
     return { gesture: "none", confidence: 0 };
   }
-
-  if (!modelInitialized) {
-    console.log("ML model not initialized yet, initializing now");
-    await simulateModelTraining();
-    modelInitialized = true;
-  }
-
-  const currentTime = Date.now();
   
-  // Faster processing - only check cooldown for positive detections
-  if ((currentTime - lastDetectionTime < DETECTION_COOLDOWN_MS) && frameHistory.length > 0 && frameHistory[frameHistory.length - 1].isVictory) {
-    // Return the last detection during cooldown
-    const lastDetection = frameHistory[frameHistory.length - 1];
-    return { 
-      gesture: lastDetection.isVictory ? "victory" : "none", 
-      confidence: lastDetection.confidence 
-    };
-  }
-
-  try {
-    // Process current frame
-    const frame = captureImageForProcessing(videoElement);
-    if (!frame) {
-      return { gesture: "none", confidence: 0.1 };
-    }
-
-    // Use faster frame analysis
-    const result = await analyzeFrameFast(frame);
-    
-    // Update frame history with more information
-    frameHistory.push(result);
-    if (frameHistory.length > FRAME_HISTORY_SIZE) {
-      frameHistory.shift();
-    }
-
-    // Count positive detections in history with higher weight for recent frames
-    const positiveFrames = frameHistory.filter(frame => frame.isVictory).length;
-    const weightedConfidence = frameHistory.reduce((sum, frame, index) => {
-      // Give more weight to recent frames (0.5, 0.75, 1.0 for a 3-frame history)
-      const weight = 0.5 + ((index / (FRAME_HISTORY_SIZE - 1)) * 0.5);
-      return sum + (frame.isVictory ? (frame.confidence * weight) : 0);
-    }, 0) / FRAME_HISTORY_SIZE;
-
-    // Ultra-fast detection with adaptive confidence
-    if (positiveFrames >= REQUIRED_POSITIVE_FRAMES) {
-      lastDetectionTime = currentTime;
-      console.log(`Victory gesture detected with confidence: ${weightedConfidence.toFixed(2)}`);
-      
-      return { 
-        gesture: "victory", 
-        confidence: Math.min(weightedConfidence * 1.2, sensitivitySettings.maxConfidence)
-      };
-    }
-
-    // If we have some positive frames but not enough for full detection
-    if (positiveFrames > 0) {
-      const partialConfidence = Math.min((weightedConfidence * positiveFrames) / REQUIRED_POSITIVE_FRAMES, 0.6);
-      return { 
-        gesture: "none", 
-        confidence: partialConfidence
-      };
-    }
-
-    return { 
-      gesture: "none", 
-      confidence: Math.min(0.1, result.confidence) 
-    };
-  } catch (error) {
-    console.error("Error in gesture detection:", error);
-    return { gesture: "none", confidence: 0.1 };
-  }
-};
-
-// Faster frame analysis function - optimized for speed
-const analyzeFrameFast = async (imageData: string): Promise<{
-  isVictory: boolean;
-  confidence: number;
-}> => {
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d', { willReadFrequently: true }); // Optimization for frequent pixel reads
-  const img = new Image();
-  
-  return new Promise((resolve) => {
-    img.onload = () => {
-      if (!ctx) {
-        resolve({ isVictory: false, confidence: 0 });
-        return;
-      }
-
-      // Use a smaller image size for faster processing
-      const scaleFactor = Math.min(1, 300 / Math.max(img.width, img.height));
-      canvas.width = img.width * scaleFactor;
-      canvas.height = img.height * scaleFactor;
-      
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      
-      // Quick check if image is too dark or too bright
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const { data, width, height } = imageData;
-      
-      // Skip processing for invalid images
-      if (isImageTooDark(data) || isImageTooBright(data)) {
-        resolve({ isVictory: false, confidence: 0 });
-        return;
-      }
-      
-      // Fast skin detection
-      const skinMap = createSkinMapFast(data, width, height);
-      
-      // Quick edge detection
-      const edges = detectEdgesFast(skinMap, width, height);
-      
-      // Optimized template matching
-      const templateScores = vSignTemplates.map(template => {
-        return matchTemplateFast(skinMap, template, width, height);
-      });
-      
-      // Get best template match
-      const bestTemplateScore = Math.max(...templateScores);
-      const bestTemplateIndex = templateScores.indexOf(bestTemplateScore);
-      
-      // Only do detailed shape analysis if we have a good template match
-      let shapeResult = { hasVShape: false, hasFingerGap: false, skinRatio: 0, shapeConfidence: 0 };
-      if (bestTemplateScore > 5) {
-        shapeResult = analyzeShapeFast(skinMap, edges, width, height);
-      }
-      
-      // Calculate final confidence - heavily weighted toward template matching for speed
-      const templateWeight = 0.8; 
-      const shapeWeight = 0.2;
-      
-      // Normalize template score to 0-1 range
-      const normalizedTemplateScore = Math.min(bestTemplateScore / 10, 1);
-      
-      // Final detection logic
-      const combinedConfidence = (normalizedTemplateScore * templateWeight) + 
-                                (shapeResult.shapeConfidence * shapeWeight);
-      
-      // More lenient V shape detection for faster recognition
-      const isVictory = (
-        (normalizedTemplateScore > 0.5 || shapeResult.hasFingerGap) && 
-        templateScores[bestTemplateIndex] > 5 &&
-        shapeResult.skinRatio > sensitivitySettings.minSkinRatio && 
-        shapeResult.skinRatio < sensitivitySettings.maxSkinRatio
-      );
-      
-      resolve({
-        isVictory,
-        confidence: isVictory ? combinedConfidence : 0.1
-      });
-    };
-    
-    img.src = imageData;
-  });
-};
-
-// Optimized template matching function
-const matchTemplateFast = (
-  skinMap: boolean[][], 
-  template: any, 
-  width: number, 
-  height: number
-): number => {
-  let score = 0;
-  const totalRegions = template.regions.length;
-  
-  // Faster template sampling - check fewer points for speed
-  template.regions.forEach(region => {
-    const startX = Math.floor(region.x * width);
-    const startY = Math.floor(region.y * height);
-    const regionWidth = Math.floor(region.width * width);
-    const regionHeight = Math.floor(region.height * height);
-    
-    let matchingPixels = 0;
-    let totalPixels = 0;
-    
-    // Sample fewer points for speed (every 3rd pixel)
-    const sampleStep = 3;
-    
-    for (let y = startY; y < startY + regionHeight && y < height; y += sampleStep) {
-      for (let x = startX; x < startX + regionWidth && x < width; x += sampleStep) {
-        if (skinMap[y] && skinMap[y][x] === region.isSkin) {
-          matchingPixels++;
-        }
-        totalPixels++;
-      }
-    }
-    
-    // Avoid division by zero
-    const regionScore = totalPixels > 0 ? matchingPixels / totalPixels : 0;
-    score += regionScore;
-  });
-  
-  // Normalize score and apply template weight
-  return (score / totalRegions) * template.weight * 10; // Scale to 0-10 range
-};
-
-// Faster skin detection
-const createSkinMapFast = (data: Uint8ClampedArray, width: number, height: number): boolean[][] => {
-  const skinMap: boolean[][] = Array(height).fill(false).map(() => Array(width).fill(false));
-  
-  // Sample fewer pixels for speed (every 2nd pixel)
-  const sampleStep = 2;
-  
-  for (let y = 0; y < height; y += sampleStep) {
-    for (let x = 0; x < width; x += sampleStep) {
-      const i = (y * width + x) * 4;
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      
-      // Apply fast skin detection to sampled pixels
-      skinMap[y][x] = isSkinToneFast(r, g, b);
-      
-      // Fill in skipped pixels for a complete map
-      if (x + 1 < width && y < height) {
-        skinMap[y][x + 1] = skinMap[y][x];
-      }
-      if (x < width && y + 1 < height) {
-        skinMap[y + 1][x] = skinMap[y][x];
-      }
-      if (x + 1 < width && y + 1 < height) {
-        skinMap[y + 1][x + 1] = skinMap[y][x];
-      }
-    }
+  // If MediaPipe is not initialized, set it up
+  if (!hands) {
+    await initializeHandTracking();
+    setupMediaPipeCamera(videoElement);
   }
   
-  return skinMap;
-};
-
-// Faster skin tone detection with simpler rules
-const isSkinToneFast = (r: number, g: number, b: number): boolean => {
-  // Skip very dark or very bright pixels
-  if (r < 40 || g < 20 || b < 20) return false;
-  if (r > 250 && g > 250 && b > 250) return false;
-
-  // Simplified skin detection rules for speed
-  return (
-    r > g && // Red channel must be greater than green
-    r > b && // Red channel must be greater than blue
-    r - Math.min(g, b) > 15 && // Difference between red and min(green,blue) should be significant
-    Math.abs(g - b) < 15 // Green and blue shouldn't be too different
-  );
-};
-
-// Faster edge detection
-const detectEdgesFast = (skinMap: boolean[][], width: number, height: number): boolean[][] => {
-  const edges: boolean[][] = Array(height).fill(false).map(() => Array(width).fill(false));
-  
-  // Sample fewer pixels for edge detection (every 2nd pixel)
-  for (let y = 2; y < height - 2; y += 2) {
-    for (let x = 2; x < width - 2; x += 2) {
-      // Only consider skin pixels
-      if (!skinMap[y][x]) continue;
-      
-      // Check only 4 neighbors instead of 8 for speed
-      const neighbors = [
-        skinMap[y-2][x],    // top
-        skinMap[y+2][x],    // bottom
-        skinMap[y][x-2],    // left
-        skinMap[y][x+2],    // right
-      ];
-      
-      // Mark as edge if it has at least 1 non-skin neighbors
-      const nonSkinNeighbors = neighbors.filter(n => !n).length;
-      edges[y][x] = nonSkinNeighbors >= 1;
-      
-      // Fill in skipped pixels
-      edges[y-1][x] = edges[y][x];
-      edges[y][x-1] = edges[y][x];
-      edges[y-1][x-1] = edges[y][x];
-    }
-  }
-  
-  return edges;
-};
-
-// Fast shape analysis
-const analyzeShapeFast = (
-  skinMap: boolean[][],
-  edges: boolean[][],
-  width: number,
-  height: number
-): {
-  hasVShape: boolean;
-  hasFingerGap: boolean;
-  skinRatio: number;
-  shapeConfidence: number;
-} => {
-  let skinPixels = 0;
-  let gapFound = false;
-  let vShapeScore = 0;
-  
-  // Calculate skin ratio by sampling
-  for (let y = 0; y < height; y += 4) {
-    for (let x = 0; x < width; x += 4) {
-      if (skinMap[y][x]) skinPixels++;
-      
-      // Look for finger gap pattern (optimized)
-      if (y > height/3 && y < height*2/3) {
-        if (!skinMap[y][x]) {
-          let leftSkin = false;
-          let rightSkin = false;
-          
-          // Check left for skin with wider jumps
-          for (let lx = Math.max(0, x - width/10); lx < x; lx += 3) {
-            if (skinMap[y][Math.floor(lx)]) {
-              leftSkin = true;
-              break;
-            }
-          }
-          
-          // Check right for skin with wider jumps
-          for (let rx = x + 1; rx < Math.min(width, x + width/10); rx += 3) {
-            if (skinMap[y][Math.floor(rx)]) {
-              rightSkin = true;
-              break;
-            }
-          }
-          
-          // If skin on both sides, found a gap
-          if (leftSkin && rightSkin) {
-            gapFound = true;
-            vShapeScore += 2; // Increase score when gap is found
-          }
-        }
-      }
-    }
-  }
-  
-  const sampledPixels = Math.ceil(width * height / 16); // Account for the sampling rate
-  const skinRatio = skinPixels / sampledPixels;
-  
-  // Fast V shape confidence calculation
-  const shapeConfidence = gapFound ? 0.7 : 0.3;
-  
-  return {
-    hasVShape: vShapeScore > 0,
-    hasFingerGap: gapFound,
-    skinRatio,
-    shapeConfidence
+  // Return current detection state (updated by MediaPipe callback)
+  return { 
+    gesture: currentGesture, 
+    confidence: detectionConfidence 
   };
-};
-
-// Quick image brightness checks
-const isImageTooDark = (data: Uint8ClampedArray): boolean => {
-  let darkPixels = 0;
-  const sampleSize = Math.floor(data.length / 64); // Sample 1/64th of pixels
-  let i = 0;
-  const step = 16; // Check every 16th pixel
-  
-  for (let count = 0; count < sampleSize; count++) {
-    i = (count * step * 4) % data.length;
-    const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-    if (brightness < 30) darkPixels++;
-  }
-  
-  return (darkPixels / sampleSize) > 0.8;
-};
-
-const isImageTooBright = (data: Uint8ClampedArray): boolean => {
-  let brightPixels = 0;
-  const sampleSize = Math.floor(data.length / 64); // Sample 1/64th of pixels
-  let i = 0;
-  const step = 16; // Check every 16th pixel
-  
-  for (let count = 0; count < sampleSize; count++) {
-    i = (count * step * 4) % data.length;
-    const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-    if (brightness > 240) brightPixels++;
-  }
-  
-  return (brightPixels / sampleSize) > 0.7;
-};
-
-// Fast image capture for processing
-const captureImageForProcessing = (videoElement: HTMLVideoElement): string | null => {
-  try {
-    const canvas = document.createElement("canvas");
-    // Use smaller size for faster processing
-    const scaleFactor = 0.5; // Process at half resolution for speed
-    canvas.width = videoElement.videoWidth * scaleFactor;
-    canvas.height = videoElement.videoHeight * scaleFactor;
-    
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-    
-    // Lower quality for faster processing
-    return canvas.toDataURL("image/jpeg", 0.5);
-  } catch (error) {
-    console.error("Error capturing image for processing:", error);
-    return null;
-  }
 };
 
 // Function to capture high-quality image
@@ -523,7 +295,44 @@ export const captureImage = (videoElement: HTMLVideoElement | null): string | nu
   
   ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
   
-  // Enhanced ML detection overlay with more detailed metadata
+  // Draw hand landmarks for better visualization
+  if (lastResults && lastResults.multiHandLandmarks && lastResults.multiHandLandmarks.length > 0) {
+    const landmarks = lastResults.multiHandLandmarks[0];
+    
+    // Draw dots at landmark positions
+    landmarks.forEach(point => {
+      ctx.beginPath();
+      ctx.arc(point.x * canvas.width, point.y * canvas.height, 5, 0, 2 * Math.PI);
+      ctx.fillStyle = currentGesture === "victory" ? "rgba(255, 50, 50, 0.7)" : "rgba(0, 255, 0, 0.7)";
+      ctx.fill();
+    });
+    
+    // Draw connecting lines for fingers
+    const fingers = [
+      [0, 1, 2, 3, 4], // thumb
+      [0, 5, 6, 7, 8], // index
+      [0, 9, 10, 11, 12], // middle
+      [0, 13, 14, 15, 16], // ring
+      [0, 17, 18, 19, 20] // pinky
+    ];
+    
+    fingers.forEach(finger => {
+      ctx.beginPath();
+      finger.forEach((idx, i) => {
+        const point = landmarks[idx];
+        if (i === 0) {
+          ctx.moveTo(point.x * canvas.width, point.y * canvas.height);
+        } else {
+          ctx.lineTo(point.x * canvas.width, point.y * canvas.height);
+        }
+      });
+      ctx.strokeStyle = currentGesture === "victory" ? "rgba(255, 50, 50, 0.7)" : "rgba(0, 255, 0, 0.7)";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    });
+  }
+  
+  // Add metadata overlay
   const timestamp = new Date().toLocaleString();
   const location = "Primary Camera";
   
@@ -537,10 +346,12 @@ export const captureImage = (videoElement: HTMLVideoElement | null): string | nu
   ctx.fillText(`Captured: ${timestamp}`, 10, canvas.height - 40);
   ctx.fillText(`Location: ${location}`, 10, canvas.height - 20);
   
-  // Add "EMERGENCY ALERT" text for victory gestures with ML model version info
-  ctx.font = "bold 20px Arial";
-  ctx.fillStyle = "red";
-  ctx.fillText("EMERGENCY ALERT - ML DETECTED V SIGN", 10, canvas.height - 65);
+  // Add "EMERGENCY ALERT" text for victory gestures
+  if (currentGesture === "victory") {
+    ctx.font = "bold 20px Arial";
+    ctx.fillStyle = "red";
+    ctx.fillText("EMERGENCY ALERT - DETECTED V SIGN", 10, canvas.height - 65);
+  }
   
   // Higher quality image capture for better evidence
   return canvas.toDataURL("image/jpeg", 0.95);
@@ -584,7 +395,7 @@ export const getGestureDisplayName = (gesture: GestureType): string => {
   }
 };
 
-// Generate more realistic mock alerts for demonstration
+// Generate mock alerts for demonstration
 export const generateMockAlerts = (count: number = 10): GestureAlert[] => {
   const alerts: GestureAlert[] = [];
   const locations = ["Main Entrance", "Reception Area", "Parking Lot", "Hallway Camera", "Primary Camera"];
@@ -637,18 +448,16 @@ export const exportAlertsToExcel = (alerts: GestureAlert[]): void => {
 // Function to reset the detection cooldown (useful for testing)
 export const resetDetectionCooldown = (): void => {
   lastDetectionTime = 0;
-  // Clear frame history for immediate new detection
-  frameHistory.length = 0;
+  consecutiveVictoryFrames = 0;
 };
 
-// Faster model training simulation
+// Function to simulate model training (for UI feedback)
 export const simulateModelTraining = async (callback?: (progress: number) => void): Promise<boolean> => {
   try {
     // Reset detection counters
-    frameHistory.length = 0;
-    modelInitialized = true;
+    consecutiveVictoryFrames = 0;
     
-    // Faster simulation for immediate response
+    // Show progress for UX
     if (callback) {
       for (let step = 0; step <= 5; step++) {
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -656,66 +465,28 @@ export const simulateModelTraining = async (callback?: (progress: number) => voi
       }
     }
     
+    // Initialize MediaPipe if not already done
+    if (!hands) {
+      const success = await initializeHandTracking();
+      if (!success) {
+        console.error("Failed to initialize MediaPipe Hands");
+        return false;
+      }
+    }
+    
     // Reset cooldown to allow immediate detection
     resetDetectionCooldown();
-    forceImmediateDetection();
-    console.log("Local ML model trained and ready for super-fast detection");
+    console.log("MediaPipe Hands model ready for detection");
     return true;
   } catch (error) {
-    console.error("Error during model training:", error);
+    console.error("Error during model initialization:", error);
     return false;
   }
 };
 
-// Force immediate detection (bypass cooldown)
-export const forceImmediateDetection = (): void => {
-  lastDetectionTime = 0;
-  frameHistory.length = 0;
-  console.log("ML model ready for immediate detection");
-};
-
-// Enhanced sensitivity settings for faster recognition
+// Set detection sensitivity
 export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void => {
-  switch (level) {
-    case 'low':
-      sensitivitySettings = {
-        skinThreshold: 0.35,
-        edgeThreshold: 0.3,
-        minConfidence: 0.75,
-        maxConfidence: 0.98,
-        minSkinRatio: 0.1, 
-        maxSkinRatio: 0.4,
-        frameThreshold: 3,
-        vShapeMinScore: 6
-      };
-      break;
-    case 'medium':
-      sensitivitySettings = {
-        skinThreshold: 0.3,
-        edgeThreshold: 0.25,
-        minConfidence: 0.65,
-        maxConfidence: 0.98,
-        minSkinRatio: 0.07,
-        maxSkinRatio: 0.45,
-        frameThreshold: 2,
-        vShapeMinScore: 4
-      };
-      break;
-    case 'high':
-      sensitivitySettings = {
-        skinThreshold: 0.25,
-        edgeThreshold: 0.2,
-        minConfidence: 0.55,
-        maxConfidence: 0.98,
-        minSkinRatio: 0.05,
-        maxSkinRatio: 0.5,
-        frameThreshold: 1,
-        vShapeMinScore: 2
-      };
-      break;
-  }
-  
-  // Reset frame history
-  frameHistory.length = 0;
-  console.log(`Detection sensitivity set to ${level} for faster recognition`);
+  sensitivityLevel = level;
+  consecutiveVictoryFrames = 0; // Reset consecutive frames counter
+  console.log(`Detection sensitivity set to ${level}`);
 };

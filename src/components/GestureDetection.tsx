@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, ChevronUp, ChevronDown, Info, Download, Camera, RefreshCw, Loader2 } from "lucide-react";
@@ -22,6 +23,8 @@ import {
   resetDetectionCooldown,
   simulateModelTraining,
   setDetectionSensitivity,
+  initializeHandTracking,
+  setupMediaPipeCamera,
   GestureType, 
   GestureAlert,
   getGestureColor,
@@ -64,13 +67,19 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     setConsecutiveFrames(0);
     
     try {
+      // Initialize MediaPipe when training the model
       await simulateModelTraining((progress) => {
         setTrainingProgress(progress);
       });
       
+      // Set up MediaPipe with the video element
+      if (videoRef) {
+        setupMediaPipeCamera(videoRef);
+      }
+      
       toast({
         title: "Model Trained",
-        description: "Super-fast hand gesture detection model is ready!",
+        description: "MediaPipe hand detection model is ready!",
       });
     } catch (error) {
       console.error("Error training model:", error);
@@ -92,47 +101,42 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       setCurrentGesture(result.gesture);
       setConfidence(result.confidence);
       
-      if (result.gesture === "victory" && result.confidence > 0.6) {
-        setConsecutiveFrames(prev => prev + 1);
+      // Victory gesture detected with high confidence
+      if (result.gesture === "victory" && result.confidence > 0.7) {
+        // Capture an image when the gesture is detected
+        const imageData = captureImage(videoRef);
+        setLastCapturedImage(imageData);
         
-        if (result.confidence > 0.7 && (
-            (sensitivity === 'low' && consecutiveFrames >= 2) || 
-            (sensitivity === 'medium' && consecutiveFrames >= 1) ||
-            (sensitivity === 'high')
-        )) {
-          const imageData = captureImage(videoRef);
-          setLastCapturedImage(imageData);
-          
-          const alert: GestureAlert = {
-            id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            timestamp: new Date(),
-            gestureType: result.gesture,
-            confidence: result.confidence,
-            imageData,
-            location: "Primary Camera",
-            processed: false
-          };
-          
-          if (onGestureDetected) {
-            onGestureDetected(alert);
-          }
-          
-          setCooldownActive(true);
-          startCooldownTimer();
-          setConsecutiveFrames(0);
-          
-          if (result.confidence > 0.8) {
-            const success = downloadImage(imageData, result.gesture);
-            
-            toast({
-              title: "⚠️ Emergency Gesture Detected",
-              description: `Victory sign detected with high confidence. ${success ? 'Evidence image saved to downloads.' : ''}`,
-              variant: "destructive",
-            });
-          }
+        // Create an alert
+        const alert: GestureAlert = {
+          id: `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          timestamp: new Date(),
+          gestureType: result.gesture,
+          confidence: result.confidence,
+          imageData,
+          location: "Primary Camera",
+          processed: false
+        };
+        
+        // Notify parent component
+        if (onGestureDetected) {
+          onGestureDetected(alert);
         }
-      } else {
-        setConsecutiveFrames(0);
+        
+        // Start cooldown to prevent multiple detections
+        setCooldownActive(true);
+        startCooldownTimer();
+        
+        // Show toast for high confidence detections
+        if (result.confidence > 0.85) {
+          const success = downloadImage(imageData, result.gesture);
+          
+          toast({
+            title: "⚠️ Emergency Gesture Detected",
+            description: `Victory sign detected with high confidence. ${success ? 'Evidence image saved to downloads.' : ''}`,
+            variant: "destructive",
+          });
+        }
       }
     } catch (error) {
       console.error("Error in gesture detection:", error);
@@ -183,7 +187,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
 
   useEffect(() => {
     if (detectionActive && videoRef) {
-      detectionIntervalRef.current = window.setInterval(handleDetection, 60);
+      detectionIntervalRef.current = window.setInterval(handleDetection, 100);
     }
     
     return () => {
@@ -203,7 +207,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     if (!detectionActive) {
       toast({
         title: "Gesture Detection Enabled",
-        description: "Super-fast AI-powered gesture detection is now active.",
+        description: "MediaPipe hand detection is now active.",
       });
     } else {
       if (detectionIntervalRef.current) {
@@ -213,7 +217,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       
       toast({
         title: "Gesture Detection Disabled",
-        description: "AI-powered gesture detection is now paused.",
+        description: "Hand detection is now paused.",
       });
     }
   };
@@ -294,7 +298,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       <CardHeader className="px-4 py-3 flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-sm font-medium flex items-center">
           <AlertTriangle className="w-4 h-4 mr-1.5" />
-          Ultra-Fast Victory Sign Detection
+          MediaPipe Victory Sign Detection
           
           <TooltipProvider>
             <Tooltip>
@@ -305,7 +309,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
               </TooltipTrigger>
               <TooltipContent side="top">
                 <p className="text-xs">
-                  The optimized AI system detects the "V" sign gesture with ultra-fast response.
+                  Using Google's MediaPipe Hands for accurate V sign detection.
                   <br />
                   When detected, an emergency alert is triggered and evidence is captured.
                 </p>
@@ -345,13 +349,13 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                 {isModelLoading ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-medium">Training ML Model:</span>
+                      <span className="text-xs font-medium">Loading MediaPipe Model:</span>
                       <span className="text-xs font-medium">{trainingProgress.toFixed(0)}%</span>
                     </div>
                     <Progress value={trainingProgress} className="h-2 bg-blue-200" />
                     <p className="text-xs text-muted-foreground mt-1 flex items-center">
                       <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      Loading optimized gesture recognition model...
+                      Loading Google MediaPipe hand tracking model...
                     </p>
                   </div>
                 ) : (
@@ -370,11 +374,6 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                     />
                     <div className="flex justify-between text-xs text-muted-foreground mt-1">
                       <span>Confidence: {(confidence * 100).toFixed(1)}%</span>
-                      {consecutiveFrames > 0 && currentGesture === "victory" && (
-                        <span className="text-primary font-medium">
-                          Detecting: {consecutiveFrames}/{sensitivity === 'low' ? '2' : sensitivity === 'medium' ? '1' : '1'}
-                        </span>
-                      )}
                     </div>
                   </div>
                 )}
