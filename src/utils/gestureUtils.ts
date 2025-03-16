@@ -518,10 +518,8 @@ export const setDetectionSensitivity = (level: 'low' | 'medium' | 'high'): void 
       trackingConfidence = 0.7;
     }
     
-    // Use void to acknowledge we're ignoring the return type
-    // and handle errors with try/catch instead
     try {
-      // Call setOptions and handle it properly
+      // Call setOptions directly without chaining promises
       hands.setOptions({
         maxNumHands: 1,
         modelComplexity: 0,
