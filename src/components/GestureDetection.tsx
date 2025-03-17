@@ -55,6 +55,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
   const lastGestureRef = useRef<GestureType>("none");
   const lastAlertTimeRef = useRef<number>(0);
   const captureIntervalRef = useRef<number | null>(null);
+  const [handDetectionError, setHandDetectionError] = useState<string | null>(null);
 
   // Initialize detection on component mount
   useEffect(() => {
@@ -81,6 +82,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     setIsModelLoading(true);
     setTrainingProgress(0);
     setConsecutiveFrames(0);
+    setHandDetectionError(null);
     
     try {
       // Simulate model training with progress updates
@@ -94,6 +96,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
           description: "Hand detection model is now active and looking for emergency gestures.",
         });
       } else {
+        setHandDetectionError("Model training failed");
         toast({
           title: "Detection Setup Issue",
           description: "There was a problem setting up the detector. Try again.",
@@ -102,6 +105,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       }
     } catch (error) {
       console.error("Error training model:", error);
+      setHandDetectionError(error instanceof Error ? error.message : "Unknown error");
       toast({
         title: "Model Setup Failed",
         description: "Using basic detection instead. Performance may be limited.",
@@ -188,6 +192,10 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
       }
     } catch (error) {
       console.error("Error in gesture detection:", error);
+      // Only set error if it's a new error to avoid constant UI updates
+      if (error instanceof Error && !handDetectionError) {
+        setHandDetectionError(error.message);
+      }
     }
   };
 
@@ -225,6 +233,7 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
     setCooldownActive(false);
     setCooldownProgress(0);
     setConsecutiveFrames(0);
+    setHandDetectionError(null);
     
     if (cooldownTimerRef.current) {
       clearInterval(cooldownTimerRef.current);
@@ -442,24 +451,46 @@ const GestureDetection: React.FC<GestureDetectionProps> = ({
                   </div>
                 ) : (
                   <div>
-                    <div className="flex justify-between mb-1">
-                      <span className="text-xs font-medium">Detected Gesture:</span>
-                      <span 
-                        className={`text-xs font-semibold ${getGestureColor(currentGesture)}`}
-                      >
-                        {getGestureDisplayName(currentGesture)}
-                      </span>
-                    </div>
-                    <Progress 
-                      value={confidence * 100} 
-                      className={`h-2 ${getConfidenceColor(confidence)}`} 
-                    />
-                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                      <span>Confidence: {(confidence * 100).toFixed(1)}%</span>
-                      {currentGesture === "victory" && (
-                        <span className="text-red-500 font-medium animate-pulse">ACTIVE!</span>
-                      )}
-                    </div>
+                    {handDetectionError ? (
+                      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-3 mb-3">
+                        <p className="text-xs text-red-700 dark:text-red-400 font-medium">
+                          MediaPipe Hands Initialization Error
+                        </p>
+                        <p className="text-xs mt-1 text-red-600 dark:text-red-300">
+                          {handDetectionError}
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 text-xs h-7 w-full border-red-300 dark:border-red-700 text-red-700 dark:text-red-300"
+                          onClick={trainModel}
+                        >
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                          Retry Initialization
+                        </Button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-xs font-medium">Detected Gesture:</span>
+                          <span 
+                            className={`text-xs font-semibold ${getGestureColor(currentGesture)}`}
+                          >
+                            {getGestureDisplayName(currentGesture)}
+                          </span>
+                        </div>
+                        <Progress 
+                          value={confidence * 100} 
+                          className={`h-2 ${getConfidenceColor(confidence)}`} 
+                        />
+                        <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                          <span>Confidence: {(confidence * 100).toFixed(1)}%</span>
+                          {currentGesture === "victory" && (
+                            <span className="text-red-500 font-medium animate-pulse">ACTIVE!</span>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
                 
